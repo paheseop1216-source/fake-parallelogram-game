@@ -856,17 +856,10 @@ class TitleScene extends Phaser.Scene {
     const startBtn = new Btn(this, W / 2, by, 300, 90, '🚀 시작하기', { fontSize: 36, fill: 0xffe08a, onClick: () => go('new') });
     const contBtn = new Btn(this, W / 2 - 165, by, 310, 90, '▶ 이어하기', { fontSize: 34, fill: 0xffe08a, onClick: () => go('continue') });
     const retryBtn = new Btn(this, W / 2 + 165, by, 310, 90, '🔄 처음부터 재도전', { fontSize: 28, fill: 0xffffff, onClick: () => go('retry') });
-    const info = txt(this, W / 2, by + 68, '', 21, '#5b6787', { align: 'center' }).setOrigin(0.5);
     // 입력한 이름으로 저장된 기록이 있으면 이어하기·재도전 버튼을 보여 준다
     const refresh = () => {
-      const p = loadAll().profiles[nameOf()];
-      const has = !!p && !!input.value.trim();
+      const has = !!loadAll().profiles[nameOf()] && !!input.value.trim();
       startBtn.setVisible(!has); contBtn.setVisible(has); retryBtn.setVisible(has);
-      if (has) {
-        const st = STAGES.map((_, i) => Object.assign(blankStage(), p.stages && p.stages[i]));
-        const floors = st.filter(s => s.done).length, best = st.reduce((a, s) => a + s.best, 0);
-        info.setText(`📂 저장된 기록: 내 건물 ${floors}/${STAGES.length}층 · 🏆 최고 기록 합계 ${best}점\n재도전하면 층은 처음부터, 최고 기록은 그대로 남아요`);
-      } else info.setText('');
     };
     input.addEventListener('input', refresh);
     input.addEventListener('keydown', e => { if (e.key === 'Enter') { sfx.tap(); go(contBtn.visible ? 'continue' : 'new'); } });
