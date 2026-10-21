@@ -1,0 +1,1944 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>가짜 평행사변형을 찾아라</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Jua&display=swap" rel="stylesheet">
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: #cfe9f7; touch-action: none; }
+  #game { width: 100vw; height: 100vh; }
+  #loading { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+    font-family: "Jua", "Malgun Gothic", sans-serif; font-size: 28px; color: #26324d; }
+  #nick { font-family: "Jua", "Malgun Gothic", sans-serif; }
+</style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/phaser/3.80.1/phaser.min.js"></script>
+</head>
+<body>
+<div id="loading">🕵️ 건축 탐정단 준비 중...</div>
+<div id="game"></div>
+<script id="gamecode">
+'use strict';
+/* =====================================================================
+   ① 설정값 : 색상, 스테이지별 출제 규칙, 피드백 문구
+   ===================================================================== */
+const FONT = '"Jua", "Malgun Gothic", "Apple SD Gothic Neo", sans-serif';
+const C = {
+  ink: 0x26324d, inkS: '#26324d', red: 0xE8453C, redD: 0xa3231c, blue: 0x2F7BF6, blueD: 0x1446a8,
+  orange: 0xff8c1a, yellow: 0xffd84d, green: 0x2bb673, mint: 0xa8f0d8, glass: 0xe9f7ff,
+  gridLine: 0x9cc7e0, gray: 0x7a8499,
+};
+const LABELS = ['ㄱ', 'ㄴ', 'ㄷ', 'ㄹ'];
+const EDGE_NAMES = ['ㄱㄴ', 'ㄴㄷ', 'ㄷㄹ', 'ㄹㄱ'];
+const PAIR_EDGES = [[0, 2], [1, 3]];            // 쌍0: 변ㄱㄴ·변ㄷㄹ, 쌍1: 변ㄴㄷ·변ㄹㄱ
+const PAIR_NAMES = ['변 ㄱㄴ과 변 ㄹㄷ', '변 ㄴㄷ과 변 ㄱㄹ'];
+const EDGE_DIR = [[0, 1], [1, 2], [3, 2], [0, 3]]; // 평행 기호 화살표 방향을 맞추기 위한 꼭짓점 순서
+
+const TYPE_INFO = {
+  PARA:      { name: '평행사변형',        real: true,  pairs: 2 },
+  RECT:      { name: '직사각형',          real: true,  pairs: 2 },
+  SQUARE:    { name: '정사각형',          real: true,  pairs: 2 },
+  RHOMBUS:   { name: '마름모',            real: true,  pairs: 2 },
+  TRAP:      { name: '사다리꼴',          real: false, pairs: 1 },
+  ISO_TRAP:  { name: '등변사다리꼴',      real: false, pairs: 1 },
+  KITE:      { name: '연꼴',              real: false, pairs: 0 },
+  QUAD:      { name: '일반 사각형',       real: false, pairs: 0 },
+  NEAR_PARA: { name: '‘거의’ 평행사변형', real: false, pairs: -1 },
+};
+
+const STAGES = [
+  { no: 1, name: '창문 공장', icon: '🏠', point: '평행한 변 찾기 연습', grid: true, mustMark: true, rotate: 'none', timer: 0,
+    questions: () => shuffle(['PARA', 'PARA', 'PARA', 'QUAD', 'QUAD']), obvious: true,
+    boss: { n: 6, fakeCount: 2, fakes: ['QUAD'], reals: ['PARA'] },
+    intro: '첫 번째 건물, 창문 공장이에요! 모눈 칸을 세어 보면 도움이 돼요.' },
+  { no: 2, name: '아파트 외벽', icon: '🏢', point: '한 쌍 vs 두 쌍', grid: true, mustMark: true, rotate: 'none', timer: 0,
+    questions: () => shuffle(['PARA', 'PARA', 'TRAP', 'TRAP', pick(['PARA', 'TRAP'])]),
+    boss: { n: 7, fakeCount: 2, fakes: ['TRAP'], reals: ['PARA'] },
+    intro: '평행한 변이 한 쌍뿐인지, 두 쌍인지 꼭 세어 보세요!' },
+  { no: 3, name: '회전 타워', icon: '🌀', point: '방향이 달라도 같다', grid: false, mustMark: true, rotate: 'spin', timer: 0,
+    questions: () => shuffle(['PARA', 'PARA', 'TRAP', 'TRAP', 'QUAD']),
+    boss: { n: 7, fakeCount: 3, fakes: ['TRAP', 'TRAP', 'QUAD'], reals: ['PARA'] },
+    intro: '부품이 빙글 돌아가 있어도 평행한 변은 그대로 평행해요!' },
+  { no: 4, name: '미래 박물관', icon: '🏛️', point: '특별한 평행사변형', grid: false, mustMark: true, rotate: 'none', timer: 0,
+    questions: () => shuffle(['RECT', 'SQUARE', 'RHOMBUS', 'KITE', 'ISO_TRAP']),
+    boss: { n: 8, fakeCount: 3, fakes: ['KITE', 'ISO_TRAP', 'TRAP'], reals: ['RECT', 'SQUARE', 'RHOMBUS', 'PARA'] },
+    intro: '직사각형, 정사각형, 마름모는 진짜일까요, 가짜일까요? 정의로 판단해요!' },
+  { no: 5, name: '우주 정거장', icon: '🚀', point: '눈속임 간파 (도전)', grid: false, mustMark: true, rotate: 'any', timer: 0,
+    questions: () => shuffle(['NEAR_PARA', 'NEAR_PARA', pick(['NEAR_PARA', 'PARA']), 'PARA', pick(['RECT', 'RHOMBUS'])]),
+    boss: { n: 8, fakeCount: 3, fakes: ['NEAR_PARA'], reals: ['PARA', 'RECT', 'RHOMBUS'] },
+    intro: '아주 살짝 비튼 가짜가 숨어 있어요. 📏 늘이기를 활용해요.' },
+];
+
+function explain(q) {
+  const par = q.pairs.indexOf(true);
+  const rotNote = (q.rot && TYPE_INFO[q.type].real) ? ' 돌려 놓아도 평행한 변은 그대로 평행해요.' : '';
+  switch (q.type) {
+    case 'PARA': return '마주 보는 두 쌍의 변이 모두 평행해요! 그래서 진짜 평행사변형이에요.' + rotNote;
+    case 'RECT': return '직사각형도 마주 보는 두 쌍의 변이 평행하니까 평행사변형이에요! 🎉' + rotNote;
+    case 'SQUARE': return '정사각형도 마주 보는 두 쌍의 변이 평행하니까 평행사변형이에요! 🎉' + rotNote;
+    case 'RHOMBUS': return '마름모도 마주 보는 두 쌍의 변이 평행하니까 평행사변형이에요! 🎉' + rotNote;
+    case 'TRAP': return `${PAIR_NAMES[par]}은 평행하지만, 다른 쌍은 늘이면 만나요. 평행한 변이 한 쌍뿐인 사다리꼴이라 가짜예요!`;
+    case 'ISO_TRAP': return `양옆 변의 길이가 같아 보여도 평행한 변은 ${PAIR_NAMES[par]} 한 쌍뿐이에요. 등변사다리꼴도 사다리꼴이라 가짜예요!`;
+    case 'KITE': return '연꼴은 마주 보는 변을 늘이면 모두 만나요. 평행한 변이 하나도 없어서 가짜예요!';
+    case 'QUAD': return '마주 보는 변을 늘이면 모두 만나요. 평행한 변이 하나도 없어서 가짜예요!';
+    case 'NEAR_PARA': return par >= 0
+      ? `삐뚤이가 꼭짓점을 살짝 옮겼어요! ${PAIR_NAMES[par]}은 평행하지만 다른 쌍은 늘이면 만나요. 가짜예요!`
+      : '삐뚤이가 꼭짓점을 살짝 옮겼어요! 평행해 보여도 늘이면 만나요. 평행한 변이 없어서 가짜예요!';
+  }
+  return '';
+}
+
+// 게임 전체 상태
+// 단계 기록: done·stars·score = 이번 도전의 진행, best·bestStars = 지금까지의 최고 기록(재도전해도 유지)
+const STAGE_SEC = 60;   // 단계마다 문제를 푸는 제한시간(초) — 정답 확인·설명 중에는 멈춘다
+const STAR_RULE = [4, 7];   // 60초 동안 한 번에 맞힌 부품 수: 4개↑ ★★, 7개↑ ★★★
+const blankStage = () => ({ done: false, stars: 0, score: 0, best: 0, bestStars: 0 });
+const GS = {
+  name: '탐정',
+  stages: STAGES.map(blankStage),
+  parts: [],          // 모은 진짜 평행사변형 부품 (엔딩 건물 창문)
+};
+let RUN = null;       // 현재 스테이지 진행 기록
+
+// ---- 기록 저장 (이 기기의 브라우저에 이름별로 저장, 서버 전송 없음) ----
+const SAVE_KEY = 'fakeParallelogramGame.v1';
+function loadAll() {
+  try { const d = JSON.parse(localStorage.getItem(SAVE_KEY)); if (d && d.profiles) return d; } catch (e) { /* 저장소를 쓸 수 없는 환경 */ }
+  return { profiles: {}, last: '' };
+}
+function saveGS() {
+  try {
+    const all = loadAll();
+    all.profiles[GS.name] = { stages: GS.stages, parts: GS.parts.slice(-30), saved: Date.now() };
+    all.last = GS.name;
+    localStorage.setItem(SAVE_KEY, JSON.stringify(all));
+  } catch (e) { /* 저장 실패해도 게임은 계속 */ }
+}
+function loadProfile(name) {
+  const p = loadAll().profiles[name];
+  GS.name = name;
+  GS.stages = STAGES.map((_, i) => Object.assign(blankStage(), p && p.stages && p.stages[i]));
+  GS.parts = (p && p.parts) || [];
+  return !!p;
+}
+// 처음부터 재도전: 이번 도전(층·별·점수)만 지우고 최고 기록은 남긴다
+function restartRun() {
+  GS.stages.forEach(s => { s.done = false; s.stars = 0; s.score = 0; });
+  GS.parts = [];
+  saveGS();
+}
+const sumOf = key => GS.stages.reduce((a, s) => a + (s[key] || 0), 0);
+
+/* =====================================================================
+   ② 기하 함수 : isParallel, isParallelogram, 도형 생성·회전
+   ===================================================================== */
+const ri = (a, b) => a + Math.floor(Math.random() * (b - a + 1));
+const pick = a => a[Math.floor(Math.random() * a.length)];
+function shuffle(a) { a = a.slice(); for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; }
+const P = (x, y) => ({ x, y });
+const add = (a, b) => P(a.x + b.x, a.y + b.y);
+const sub = (a, b) => P(a.x - b.x, a.y - b.y);
+const mul = (a, k) => P(a.x * k, a.y * k);
+const cross = (u, v) => u.x * v.y - u.y * v.x;
+const dot = (u, v) => u.x * v.x + u.y * v.y;
+const len = u => Math.hypot(u.x, u.y);
+const unitV = u => { const l = len(u) || 1; return P(u.x / l, u.y / l); };
+function rotP(p, ang, o = P(0, 0)) { const c = Math.cos(ang), s = Math.sin(ang), d = sub(p, o); return P(o.x + d.x * c - d.y * s, o.y + d.x * s + d.y * c); }
+
+// p, q: 변의 시작/끝 점 {x, y} — 두 방향 벡터의 외적이 0이면 평행
+function isParallel(p1, p2, q1, q2, eps = 1e-6) {
+  const u = sub(p2, p1), v = sub(q2, q1);
+  return Math.abs(cross(u, v)) < eps * Math.max(1, len(u) * len(v));
+}
+function isParallelogram(A, B, C, D) { return isParallel(A, B, D, C) && isParallel(A, D, B, C); }
+function countParallelPairs(A, B, C, D) { return (isParallel(A, B, D, C) ? 1 : 0) + (isParallel(A, D, B, C) ? 1 : 0); }
+function pairFlags(vs) { return [isParallel(vs[0], vs[1], vs[3], vs[2]), isParallel(vs[0], vs[3], vs[1], vs[2])]; }
+
+function signedArea(vs) { let s = 0; for (let i = 0; i < 4; i++) { const a = vs[i], b = vs[(i + 1) % 4]; s += a.x * b.y - b.x * a.y; } return s / 2; }
+function isConvex(vs) {
+  let sign = 0;
+  for (let i = 0; i < 4; i++) {
+    const a = vs[i], b = vs[(i + 1) % 4], c = vs[(i + 2) % 4];
+    const z = cross(sub(b, a), sub(c, b));
+    if (Math.abs(z) < 1e-9) return false;
+    const s = Math.sign(z);
+    if (!sign) sign = s; else if (s !== sign) return false;
+  }
+  return true;
+}
+function angleAt(vs, i) {
+  const p = vs[i], u = sub(vs[(i + 3) % 4], p), v = sub(vs[(i + 1) % 4], p);
+  return Math.acos(Math.max(-1, Math.min(1, dot(u, v) / (len(u) * len(v))))) * 180 / Math.PI;
+}
+function lineAngleDiff(p1, p2, q1, q2) {
+  const a = Math.atan2(p2.y - p1.y, p2.x - p1.x), b = Math.atan2(q2.y - q1.y, q2.x - q1.x);
+  let d = Math.abs(a - b) * 180 / Math.PI % 180; if (d > 90) d = 180 - d; return d;
+}
+function pairAngleDiff(vs, p) { return p === 0 ? lineAngleDiff(vs[0], vs[1], vs[3], vs[2]) : lineAngleDiff(vs[0], vs[3], vs[1], vs[2]); }
+function lineIntersect(a, b, c, d) {
+  const r = sub(b, a), s = sub(d, c), den = cross(r, s);
+  if (Math.abs(den) < 1e-9) return null;
+  const t = cross(sub(c, a), s) / den;
+  return add(a, mul(r, t));
+}
+function distSeg(p, a, b) {
+  const ab = sub(b, a), t = Math.max(0, Math.min(1, dot(sub(p, a), ab) / (dot(ab, ab) || 1)));
+  return len(sub(p, add(a, mul(ab, t))));
+}
+// 화면에서 시계 방향, 가장 위(왼쪽) 꼭짓점이 ㄱ이 되도록 정리
+function normalize(vs) {
+  vs = vs.map(p => P(p.x, p.y));
+  if (signedArea(vs) < 0) vs = [vs[0], vs[3], vs[2], vs[1]];
+  let k = 0;
+  for (let i = 1; i < 4; i++) if (vs[i].y < vs[k].y - 1e-9 || (Math.abs(vs[i].y - vs[k].y) < 1e-9 && vs[i].x < vs[k].x)) k = i;
+  vs = [0, 1, 2, 3].map(i => vs[(i + k) % 4]);
+  const mx = Math.min(...vs.map(p => p.x)), my = Math.min(...vs.map(p => p.y));
+  return vs.map(p => P(p.x - mx, p.y - my));
+}
+const transpose = vs => vs.map(p => P(p.y, p.x));
+const flipY = vs => vs.map(p => P(p.x, -p.y));
+const sig = vs => vs.map(p => p.x.toFixed(2) + ',' + p.y.toFixed(2)).join('|');
+
+// 유형별 템플릿 (모눈 정수 좌표)
+const RAW = {
+  PARA(o) {
+    const b = o.big ? 2 : 0;
+    if (Math.random() < 0.6) {
+      const a = ri(3, 6) + b, h = ri(2, 4) + (o.big ? 1 : 0), s = ri(1, 3) * pick([-1, 1]);
+      const vs = [P(0, 0), P(a, 0), P(a + s, h), P(s, h)];
+      return Math.random() < 0.25 ? transpose(vs) : vs;
+    }
+    const u = P(ri(3, 5) + b, ri(-2, 2)), v = P(ri(-3, 3), ri(2, 4) + (o.big ? 1 : 0));
+    return [P(0, 0), u, add(u, v), v];
+  },
+  RECT() {
+    if (Math.random() < 0.6) { let a = ri(3, 7), b = ri(2, 5); if (a === b) a++; return [P(0, 0), P(a, 0), P(a, b), P(0, b)]; }
+    const [p, q] = pick([[2, 1], [1, 2], [3, 1], [1, 3]]), [m1, m2] = pick([[2, 1], [1, 2]]);
+    const u = mul(P(p, q), m1), v = mul(P(-q, p), m2);
+    return [P(0, 0), u, add(u, v), v];
+  },
+  SQUARE() {
+    if (Math.random() < 0.5) { const a = ri(3, 5); return [P(0, 0), P(a, 0), P(a, a), P(0, a)]; }
+    const [p, q] = pick([[3, 1], [1, 3], [2, 2], [3, 2], [2, 3]]);
+    const u = P(p, q), v = P(-q, p);
+    return [P(0, 0), u, add(u, v), v];
+  },
+  RHOMBUS() {
+    if (Math.random() < 0.5) { const a = ri(2, 4); let b = ri(2, 4); if (a === b) b = a + 1; return [P(0, -b), P(a, 0), P(0, b), P(-a, 0)]; }
+    const [u, v] = pick([[P(5, 0), P(3, 4)], [P(5, 0), P(-3, 4)], [P(4, 3), P(0, 5)], [P(3, 4), P(0, 5)], [P(4, -3), P(4, 3)]]);
+    return [P(0, 0), u, add(u, v), v];
+  },
+  TRAP() {
+    const t = ri(2, 6); let b = ri(3, 8); if (t === b) b += 2;
+    const h = ri(2, 4), off = ri(-1, b - t + 1);
+    let vs = [P(off, 0), P(off + t, 0), P(b, h), P(0, h)];
+    if (Math.random() < 0.3) vs = flipY(vs);
+    if (Math.random() < 0.3) vs = transpose(vs);
+    return vs;
+  },
+  ISO_TRAP() {
+    const b = ri(5, 8), s = ri(1, Math.floor((b - 2) / 2)), h = ri(2, 4);
+    let vs = [P(s, 0), P(b - s, 0), P(b, h), P(0, h)];
+    if (Math.random() < 0.5) vs = flipY(vs);
+    if (Math.random() < 0.3) vs = transpose(vs);
+    return vs;
+  },
+  KITE() {
+    const w = ri(2, 3), t = ri(1, 3); let bb = ri(3, 5); if (bb === t) bb++;
+    let vs = [P(0, 0), P(w, t), P(0, t + bb), P(-w, t)];
+    if (Math.random() < 0.5) vs = flipY(vs);
+    if (Math.random() < 0.5) vs = transpose(vs);
+    return vs;
+  },
+  QUAD() { return [P(ri(-4, -1), ri(-4, -1)), P(ri(1, 4), ri(-4, -1)), P(ri(1, 4), ri(1, 4)), P(ri(-4, -1), ri(1, 4))]; },
+  NEAR_PARA(o) {
+    const vs = RAW.PARA({ big: o.big });
+    const k = ri(0, 3);
+    if (o.subtle) {
+      if (Math.random() < 0.6) {          // 꼭짓점을 이웃 꼭짓점 기준으로 2~3° 돌리기 → 평행 0쌍
+        const deg = (2 + Math.random()) * pick([-1, 1]);
+        vs[k] = rotP(vs[k], deg * Math.PI / 180, vs[(k + 3) % 4]);
+      } else {                            // 변을 살짝 늘이기 → 평행 1쌍
+        const d = sub(vs[k], vs[(k + 3) % 4]);
+        vs[k] = add(vs[k], mul(d, 0.08 + Math.random() * 0.05));
+      }
+      return vs;
+    }
+    vs[k] = add(vs[k], pick([P(1, 0), P(-1, 0), P(0, 1), P(0, -1)]));   // 모눈 1칸 이동
+    return vs;
+  },
+};
+
+function genShape(type, o = {}) {
+  for (let tries = 0; tries < 400; tries++) {
+    const vs = normalize(RAW[type](o));
+    if (!isConvex(vs)) continue;
+    if (Math.min(...[0, 1, 2, 3].map(i => angleAt(vs, i))) < 26) continue;
+    const f = pairFlags(vs), n = f.filter(Boolean).length, want = TYPE_INFO[type].pairs;
+    if (want >= 0 ? n !== want : n >= 2) continue;
+    if (type === 'PARA') {
+      if (Math.abs(angleAt(vs, 0) - 90) < 1e-6) continue;                          // 직사각형 제외
+      if (Math.abs(len(sub(vs[1], vs[0])) - len(sub(vs[3], vs[0]))) < 1e-6) continue; // 마름모 제외
+    }
+    // 평행하지 않은 쌍은 눈으로도 구분될 만큼 (NEAR_PARA는 일부러 미세하게)
+    if (type !== 'NEAR_PARA') {
+      const minDiff = type === 'QUAD' && o.obvious ? 15 : 7;
+      if ([0, 1].some(p => !f[p] && pairAngleDiff(vs, p) < minDiff)) continue;
+    }
+    const w = Math.max(...vs.map(p => p.x)), h = Math.max(...vs.map(p => p.y));
+    if (w > (o.maxW || 12) || h > (o.maxH || 9)) continue;
+    if (o.avoid && o.avoid.has(sig(vs))) continue;
+    return vs;
+  }
+  // 크기·중복 조건이 너무 빡빡하면 조건을 풀어서 다시 만든다 (게임이 멈추지 않도록)
+  if (o.maxW || o.maxH || o.avoid) return genShape(type, Object.assign({}, o, { maxW: 0, maxH: 0, avoid: null }));
+  throw new Error('도형 생성 실패: ' + type);
+}
+
+function rotFor(mode) {
+  if (mode === 'none') return 0;
+  if (mode === 'spin' && Math.random() < 0.35) return pick([90, 180, 270]) * Math.PI / 180;
+  let d; do { d = ri(15, 345); } while (d % 90 < 12 || d % 90 > 78);
+  return d * Math.PI / 180;
+}
+let QID = 0;
+function makeQuestion(type, cfg, o = {}) {
+  const vs = genShape(type, o);
+  const pairs = pairFlags(vs), count = pairs.filter(Boolean).length;
+  // 정답은 수동 입력하지 않고 로직으로 자동 판정
+  const answer = isParallelogram(vs[0], vs[1], vs[2], vs[3]) ? 'real' : 'fake';
+  console.assert((answer === 'real') === TYPE_INFO[type].real, '정답 검증 실패', type, vs);
+  return { id: ++QID, type, verts: vs, pairs, count, answer, rot: o.rot !== undefined ? o.rot : rotFor(cfg.rotate) };
+}
+function buildStageQuestions(i) {
+  const cfg = STAGES[i], seen = new Set();
+  return cfg.questions().map(t => {
+    const o = { obvious: cfg.obvious, subtle: i === 4, big: i === 4, maxW: i < 2 ? 9 : 12, maxH: i < 2 ? 6 : 9, avoid: seen };
+    const q = makeQuestion(t, cfg, o);
+    seen.add(sig(q.verts));
+    return q;
+  });
+}
+
+// 검수: 모든 유형이 isParallelogram() 결과와 일치하는지 시작할 때 자동 점검
+(function selfCheck() {
+  let bad = 0;
+  Object.keys(TYPE_INFO).forEach(t => {
+    for (let k = 0; k < 40; k++) {
+      const vs = genShape(t, { subtle: k % 2 === 0, big: k % 2 === 0, obvious: true });
+      if (isParallelogram(...vs) !== TYPE_INFO[t].real) bad++;
+      if (countParallelPairs(...vs) !== pairFlags(vs).filter(Boolean).length) bad++;
+    }
+  });
+  console.log(bad ? `⚠️ 도형 검수 실패 ${bad}건` : '✅ 도형 검수 통과 (유형별 40개 × 9종)');
+})();
+
+/* =====================================================================
+   ③ 공용 UI : ShapeView(변 선택·색칠·늘이기), 버튼, 효과음, 캐릭터
+   ===================================================================== */
+const sfx = {
+  ctx: null, muted: false,
+  ac() {
+    if (this.muted) return null;
+    try {
+      if (!this.ctx) { const A = window.AudioContext || window.webkitAudioContext; if (!A) return null; this.ctx = new A(); }
+      if (this.ctx.state === 'suspended') this.ctx.resume();
+    } catch (e) { return null; }
+    return this.ctx;
+  },
+  tone(f, t0, dur, { type = 'sine', vol = 0.18, f2 = null } = {}) {
+    const c = this.ac(); if (!c) return;
+    const t = c.currentTime + t0, o = c.createOscillator(), g = c.createGain();
+    o.type = type; o.frequency.setValueAtTime(f, t);
+    if (f2) o.frequency.exponentialRampToValueAtTime(f2, t + dur);
+    g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(vol, t + 0.015); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    o.connect(g); g.connect(c.destination); o.start(t); o.stop(t + dur + 0.05);
+  },
+  tap() { this.tone(700, 0, 0.06, { type: 'triangle', vol: 0.07 }); },
+  mark() { this.tone(880, 0, 0.08, { type: 'triangle', vol: 0.1 }); },
+  pair() { this.tone(660, 0, 0.09, { type: 'triangle', vol: 0.1 }); this.tone(990, 0.08, 0.14, { type: 'triangle', vol: 0.1 }); },
+  ding() { this.tone(1318.5, 0, 0.45, { vol: 0.2 }); this.tone(1046.5, 0.2, 0.6, { vol: 0.2 }); },   // 띵동
+  boop() { this.tone(480, 0, 0.28, { vol: 0.15, f2: 240 }); },                                    // 뿅
+  buzz() { this.tone(330, 0, 0.18, { type: 'square', vol: 0.07 }); this.tone(220, 0.2, 0.32, { type: 'square', vol: 0.07, f2: 150 }); }, // 삐-익 (오답)
+  soft() { this.tone(330, 0, 0.15, { type: 'triangle', vol: 0.1 }); },
+  tick() { this.tone(1200, 0, 0.04, { type: 'square', vol: 0.035 }); },
+  win() { [523.25, 659.25, 783.99, 1046.5].forEach((f, i) => this.tone(f, i * 0.12, 0.4, { vol: 0.16 })); },
+  hit() { this.tone(220, 0, 0.2, { type: 'square', vol: 0.08, f2: 70 }); this.tone(1100, 0, 0.08, { type: 'triangle', vol: 0.12 }); },
+  laugh() { [0, 0.11, 0.22, 0.33].forEach((t, i) => this.tone(760 - i * 50, t, 0.09, { type: 'triangle', vol: 0.08, f2: 520 - i * 50 })); },
+  scan() { this.tone(300, 0, 0.55, { vol: 0.06, f2: 1300 }); },
+  whoosh() { this.tone(1000, 0, 0.25, { vol: 0.05, f2: 220 }); },
+  combo() { [784, 988, 1175, 1568].forEach((f, i) => this.tone(f, i * 0.07, 0.2, { type: 'triangle', vol: 0.12 })); },
+};
+
+// 삐뚤이 대사
+const TAUNT = ['이번 건 진짜일까~ 가짜일까~?', '히히, 이건 못 알아보겠지?', '살짝 비틀어 놨는데~ 알아챌까?', '눈으로만 보면 속을걸?', '이건 내 최고 걸작이야!'];
+const LAUGH = ['히히! 속았지롱~', '내 솜씨 어때? 히히', '눈으로만 보면 속는다니까~', '변을 늘여 봤어야지~!'];
+const HIT_FAKE = ['으악! 들켰다!', '어떻게 알았지?!', '내 가짜가…!', '윽, 색연필 빔이다!'];
+const HIT_REAL = ['칫, 그건 진짜였어…', '진짜를 알아보다니!', '으으, 정의를 제대로 아네?'];
+const BOSS_TAUNT = ['가짜 창문, 찾을 수 있으면 찾아 봐~', '히히, 다 똑같아 보이지?', '마주 보는 변… 잘 보라구~'];
+
+function txt(scene, x, y, s, size = 24, color = C.inkS, extra = {}) {
+  return scene.add.text(x, y, s, Object.assign({ fontFamily: FONT, fontSize: size + 'px', color }, extra));
+}
+
+class Btn extends Phaser.GameObjects.Container {
+  constructor(scene, x, y, w, h, label, o = {}) {
+    super(scene, x, y);
+    this.w = w; this.h = h;
+    this.o = Object.assign({ fill: 0xffffff, stroke: C.ink, color: C.inkS, fontSize: 24, r: Math.min(18, h / 2), selFill: 0xfff1a8 }, o);
+    this.bg = scene.add.graphics();
+    this.txt = txt(scene, 0, 0, label, this.o.fontSize, this.o.color, { align: 'center', lineSpacing: 2 }).setOrigin(0.5);
+    this.add([this.bg, this.txt]);
+    this.enabled = true; this.selected = false; this.hover = false;
+    this.setSize(w, h);
+    this.setInteractive({ useHandCursor: true });
+    this.on('pointerover', () => { this.hover = true; this.redraw(); });
+    this.on('pointerout', () => { this.hover = false; this.redraw(); });
+    this.on('pointerdown', (p, lx, ly, ev) => {
+      if (ev && ev.stopPropagation) ev.stopPropagation();
+      if (!this.enabled) { if (this.o.onDisabled) this.o.onDisabled(); return; }
+      sfx.tap();
+      this.setScale(0.95);
+      scene.time.delayedCall(90, () => { if (this.scene) this.setScale(1); });
+      if (this.o.onClick) this.o.onClick();
+    });
+    this.redraw();
+    scene.add.existing(this);
+  }
+  redraw() {
+    const g = this.bg, w = this.w, h = this.h, r = this.o.r;
+    g.clear();
+    g.fillStyle(0x1b2340, 0.15).fillRoundedRect(-w / 2 + 2, -h / 2 + 5, w, h, r);
+    g.fillStyle(!this.enabled ? 0xe3e6ec : (this.selected ? this.o.selFill : this.o.fill), 1).fillRoundedRect(-w / 2, -h / 2, w, h, r);
+    if (this.hover && this.enabled) g.fillStyle(0xffffff, 0.3).fillRoundedRect(-w / 2, -h / 2, w, h, r);
+    g.lineStyle(this.selected ? 5 : 3, this.selected ? 0xf2a900 : (this.enabled ? this.o.stroke : 0xb3b9c6), 1).strokeRoundedRect(-w / 2, -h / 2, w, h, r);
+    this.txt.setAlpha(this.enabled ? 1 : 0.45);
+  }
+  setEnabled(b) { this.enabled = b; this.redraw(); return this; }
+  setSelected(b) { this.selected = b; this.redraw(); return this; }
+  setLabel(s) { this.txt.setText(s); return this; }
+}
+
+function makeMuteBtn(scene, x, y) {
+  const b = new Btn(scene, x, y, 56, 50, sfx.muted ? '🔇' : '🔊', { fontSize: 26 });
+  b.o.onClick = () => { sfx.muted = !sfx.muted; b.setLabel(sfx.muted ? '🔇' : '🔊'); };
+  return b;
+}
+
+function floatText(scene, x, y, s, color = '#1f9d5c') {
+  const t = txt(scene, x, y, s, 32, color, { stroke: '#ffffff', strokeThickness: 7 }).setOrigin(0.5).setDepth(60);
+  scene.tweens.add({ targets: t, y: y - 70, alpha: 0, duration: 1500, ease: 'Cubic.easeOut', onComplete: () => t.destroy() });
+}
+
+function dashed(g, a, b, color, w, dash = 16, gap = 10) {
+  const L = len(sub(b, a)); if (L < 1) return;
+  const d = mul(sub(b, a), 1 / L);
+  g.lineStyle(w, color, 0.95);
+  for (let s = 0; s < L; s += dash + gap) { const e = Math.min(L, s + dash); g.lineBetween(a.x + d.x * s, a.y + d.y * s, a.x + d.x * e, a.y + d.y * e); }
+}
+// 교과서 평행 기호: 빨강 = 화살표 1개, 파랑 = 화살표 2개 (색약 학생도 구분 가능)
+function drawChevrons(g, a, b, n, color, lw) {
+  const d = unitV(sub(b, a)), nr = P(-d.y, d.x), m = mul(add(a, b), 0.5), s = Math.max(8, lw * 1.5);
+  for (let k = 0; k < n; k++) {
+    const off = (k - (n - 1) / 2) * s * 1.15;
+    const tip = add(m, mul(d, off + s * 0.5));
+    const w1 = add(add(tip, mul(d, -s)), mul(nr, s)), w2 = add(add(tip, mul(d, -s)), mul(nr, -s));
+    [[lw + 4, 0xffffff], [Math.max(3, lw - 2), color]].forEach(([w, c]) => {
+      g.lineStyle(w, c, 1); g.beginPath(); g.moveTo(w1.x, w1.y); g.lineTo(tip.x, tip.y); g.lineTo(w2.x, w2.y); g.strokePath();
+    });
+  }
+}
+function drawStar(g, x, y, r, color, alpha = 1) {
+  const pts = [];
+  for (let i = 0; i < 10; i++) { const a = -Math.PI / 2 + i * Math.PI / 5, rr = i % 2 ? r * 0.45 : r; pts.push(P(x + Math.cos(a) * rr, y + Math.sin(a) * rr)); }
+  g.fillStyle(color, alpha).fillPoints(pts, true);
+  g.lineStyle(3, C.ink, 0.6).strokePoints(pts, true);
+}
+// 작은 도형(엔딩 건물 창문, 아이콘 등)
+function drawMiniShape(g, verts, cx, cy, size, fill, rot = 0, lw = 3) {
+  const xs = verts.map(p => p.x), ys = verts.map(p => p.y);
+  const c = P((Math.min(...xs) + Math.max(...xs)) / 2, (Math.min(...ys) + Math.max(...ys)) / 2);
+  const R = Math.max(...verts.map(p => len(sub(p, c)))) || 1;
+  const k = size / 2 / R;
+  const pts = verts.map(p => { const q = rotP(mul(sub(p, c), k), rot); return P(cx + q.x, cy + q.y); });
+  g.fillStyle(fill, 1).fillPoints(pts, true);
+  g.lineStyle(lw, C.ink, 1).strokePoints(pts, true);
+}
+function para(g, x, y, w, h, skew, color, line = true) {
+  const pts = [P(x + skew, y), P(x + w + skew, y), P(x + w, y + h), P(x, y + h)];
+  g.fillStyle(color, 1).fillPoints(pts, true);
+  if (line) g.lineStyle(2, C.ink, 0.8).strokePoints(pts, true);
+}
+
+class ShapeView {
+  constructor(scene, q, rect, opts = {}) {
+    this.scene = scene; this.q = q; this.rect = rect;
+    this.o = Object.assign({ labels: true, lineW: 7, grid: false, maxUnit: 70, pad: 1.0, fill: C.glass, fillAlpha: 0.92, depth: 5, labelSize: 28, circleFit: q.rot !== 0 }, opts);
+    this.rot = this.o.startRot !== undefined ? this.o.startRot : q.rot;
+    this.showGrid = this.o.grid;
+    this.marks = { red: null, blue: null };
+    this.selected = null; this.highlight = null; this.ext = {}; this.answerMode = false;
+    const d = this.o.depth;
+    this.under = scene.add.graphics().setDepth(d);
+    this.g = scene.add.graphics().setDepth(d + 1);
+    this.over = scene.add.graphics().setDepth(d + 2);
+    this.maskG = scene.make.graphics({ add: false });
+    this.maskG.fillStyle(0xffffff).fillRect(rect.x, rect.y, rect.w, rect.h);
+    const m = this.maskG.createGeometryMask();
+    this.under.setMask(m); this.over.setMask(m);
+    this.labels = [];
+    if (this.o.labels) for (let i = 0; i < 4; i++) this.labels.push(txt(scene, 0, 0, LABELS[i], this.o.labelSize, C.inkS, { stroke: '#ffffff', strokeThickness: 6 }).setOrigin(0.5).setDepth(d + 3));
+    this.meetTexts = [0, 1].map(() => txt(scene, 0, 0, '만나요!', 22, '#c65300', { stroke: '#ffffff', strokeThickness: 5 }).setOrigin(0.5, 1.3).setDepth(d + 3).setVisible(false));
+    const vs = q.verts, xs = vs.map(p => p.x), ys = vs.map(p => p.y);
+    this.c = P((Math.min(...xs) + Math.max(...xs)) / 2, (Math.min(...ys) + Math.max(...ys)) / 2);
+    const bw = Math.max(...xs) - Math.min(...xs), bh = Math.max(...ys) - Math.min(...ys);
+    const R = Math.max(...vs.map(p => len(sub(p, this.c)))), pad = this.o.pad;
+    this.unit = this.o.circleFit ? Math.min(rect.w, rect.h) / 2 / (R + pad) : Math.min(rect.w / (bw + 2 * pad), rect.h / (bh + 2 * pad));
+    this.unit = Math.min(this.unit, this.o.maxUnit);
+    this.cx = rect.x + rect.w / 2; this.cy = rect.y + rect.h / 2;
+    this.draw();
+  }
+  toS(p) {
+    const dx = (p.x - this.c.x) * this.unit, dy = (p.y - this.c.y) * this.unit, c = Math.cos(this.rot), s = Math.sin(this.rot);
+    return P(this.cx + dx * c - dy * s, this.cy + dx * s + dy * c);
+  }
+  pairColor(p) {
+    if (this.answerMode) { const k = [0, 1].filter(i => this.q.pairs[i]).indexOf(p); return k < 0 ? null : (k === 0 ? 'red' : 'blue'); }
+    if (this.marks.red === p) return 'red';
+    if (this.marks.blue === p) return 'blue';
+    return null;
+  }
+  extend(edges, color = C.gray, dur = 750) {
+    return new Promise(res => {
+      edges.forEach(e => { this.ext[e] = { p: 0, color }; });
+      this.scene.tweens.addCounter({ from: 0, to: 1, duration: dur, ease: 'Sine.easeOut',
+        onUpdate: t => edges.forEach(e => { if (this.ext[e]) this.ext[e].p = t.getValue(); }), onComplete: () => res() });
+    });
+  }
+  edgeAt(x, y, th = 24) {
+    const S = this.S; let best = null, bd = th;
+    for (let i = 0; i < 4; i++) { const d = distSeg(P(x, y), S[i], S[(i + 1) % 4]); if (d < bd) { bd = d; best = i; } }
+    return best;
+  }
+  contains(x, y) { const r = this.rect; return x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h; }
+  draw() {
+    const S = this.S = this.q.verts.map(p => this.toS(p));
+    const g = this.g, u = this.under, ov = this.over, R = this.rect, lw = this.o.lineW;
+    g.clear(); u.clear(); ov.clear();
+    const pulse = (Math.sin(this.scene.time.now / 140) + 1) / 2;
+    if (this.showGrid) {
+      u.lineStyle(1.5, C.gridLine, 0.8);
+      const Rs = Math.hypot(R.w, R.h) / 2 / this.unit + 1;
+      const x0 = Math.floor(this.c.x - Rs), x1 = Math.ceil(this.c.x + Rs), y0 = Math.floor(this.c.y - Rs), y1 = Math.ceil(this.c.y + Rs);
+      for (let x = x0; x <= x1; x++) { const a = this.toS(P(x, y0)), b = this.toS(P(x, y1)); u.lineBetween(a.x, a.y, b.x, b.y); }
+      for (let y = y0; y <= y1; y++) { const a = this.toS(P(x0, y)), b = this.toS(P(x1, y)); u.lineBetween(a.x, a.y, b.x, b.y); }
+    }
+    for (const k in this.ext) {
+      const e = +k, ex = this.ext[e], a = S[e], b = S[(e + 1) % 4], d = unitV(sub(b, a)), L = ex.p * 1800;
+      dashed(u, add(a, mul(d, -L)), add(b, mul(d, L)), ex.color, Math.max(3, lw - 3));
+    }
+    this.meetTexts.forEach(t => t.setVisible(false));
+    [0, 1].forEach(p => {
+      const [e1, e2] = PAIR_EDGES[p], x1 = this.ext[e1], x2 = this.ext[e2];
+      if (!x1 || !x2 || x1.p < 0.999 || x2.p < 0.999 || this.q.pairs[p]) return;
+      const I = lineIntersect(S[e1], S[(e1 + 1) % 4], S[e2], S[(e2 + 1) % 4]);
+      if (!I || I.x < R.x + 8 || I.x > R.x + R.w - 8 || I.y < R.y + 8 || I.y > R.y + R.h - 8) return;
+      ov.fillStyle(C.orange, 0.3).fillCircle(I.x, I.y, 16 + 8 * pulse);
+      ov.fillStyle(C.orange, 1).fillCircle(I.x, I.y, 8);
+      if (this.o.labels) this.meetTexts[p].setPosition(I.x, I.y).setVisible(true);
+    });
+    g.fillStyle(this.o.fill, this.o.fillAlpha).fillPoints(S, true);
+    for (let i = 0; i < 4; i++) {
+      const a = S[i], b = S[(i + 1) % 4], col = this.pairColor(i % 2);
+      if (this.selected === i) { g.lineStyle(lw + 14, C.yellow, 0.55 + 0.4 * pulse); g.lineBetween(a.x, a.y, b.x, b.y); }
+      if (this.highlight && this.highlight.includes(i)) { g.lineStyle(lw + 16, C.yellow, 0.25 + 0.65 * pulse); g.lineBetween(a.x, a.y, b.x, b.y); }
+      if (col && this.answerMode) { g.lineStyle(lw + 12, col === 'red' ? C.red : C.blue, 0.15 + 0.3 * pulse); g.lineBetween(a.x, a.y, b.x, b.y); }
+      g.lineStyle(col ? lw + 2 : lw, col ? (col === 'red' ? C.red : C.blue) : C.ink, 1);
+      g.lineBetween(a.x, a.y, b.x, b.y);
+    }
+    g.fillStyle(C.ink, 1); S.forEach(s => g.fillCircle(s.x, s.y, lw / 2 + 1.5));
+    for (let i = 0; i < 4; i++) {
+      const col = this.pairColor(i % 2); if (!col) continue;
+      const [ia, ib] = EDGE_DIR[i];
+      drawChevrons(g, S[ia], S[ib], col === 'red' ? 1 : 2, col === 'red' ? C.redD : C.blueD, lw);
+    }
+    if (this.labels.length) {
+      const on = this.labelsOn !== false;
+      this.labels.forEach(t => t.setVisible(on));
+      const cen = mul(S.reduce((acc, s) => add(acc, s), P(0, 0)), 0.25);
+      this.labels.forEach((t, i) => { const d = unitV(sub(S[i], cen)); t.setPosition(S[i].x + d.x * this.o.labelSize, S[i].y + d.y * this.o.labelSize); });
+    }
+  }
+  setVisible(b) { [this.under, this.g, this.over, ...this.labels].forEach(o => o.setVisible(b)); if (!b) this.meetTexts.forEach(t => t.setVisible(false)); }
+  destroy() { [this.under, this.g, this.over, this.maskG, ...this.labels, ...this.meetTexts].forEach(o => o.destroy()); }
+}
+
+function drawBg(scene) {
+  const W = scene.scale.width, H = scene.scale.height, g = scene.add.graphics().setDepth(-10);
+  g.fillGradientStyle(0xbfe6ff, 0xdcd0ff, 0xc8f5e6, 0xe6f0ff, 1);
+  g.fillRect(0, 0, W, H);
+  g.fillStyle(0xffffff, 0.35);
+  [[0.12, 0.18, 90], [0.85, 0.12, 120], [0.7, 0.82, 150], [0.2, 0.86, 110]].forEach(([x, y, r]) => g.fillCircle(W * x, H * y, r));
+  let x = 0;
+  while (x < W) {
+    const w = 60 + ((x * 7) % 50), h = 70 + ((x * 13) % 140);
+    g.fillStyle(0x8fb8de, 0.16).fillRect(x, H - h, w, h);
+    for (let yy = H - h + 14; yy < H - 20; yy += 26) for (let xx = x + 10; xx < x + w - 16; xx += 20) para(g, xx, yy, 10, 12, 3, 0xffffff, false);
+    x += w + 14;
+  }
+  g.fillStyle(0xffffff, 0.0);
+  return g;
+}
+
+function makePara(scene, x, y, s = 1) {
+  const c = scene.add.container(x, y), g = scene.add.graphics(); c.add(g);
+  const k = v => v * s;
+  g.fillStyle(0x1b2340, 0.12).fillEllipse(0, k(80), k(90), k(16));
+  g.fillStyle(C.ink).fillRoundedRect(k(-30), k(58), k(24), k(16), k(6)).fillRoundedRect(k(6), k(58), k(24), k(16), k(6));
+  // 팔 + 색연필
+  g.lineStyle(k(6), C.ink).lineBetween(k(-34), k(20), k(-56), k(6));
+  g.fillStyle(C.red).fillPoints([P(k(-60), k(10)), P(k(-50), k(4)), P(k(-64), k(-26)), P(k(-74), k(-20))], true);
+  g.fillStyle(0xffd0c8).fillTriangle(k(-64), k(-26), k(-74), k(-20), k(-74), k(-34));
+  // 팔 + 돋보기
+  g.lineStyle(k(6), C.ink).lineBetween(k(34), k(20), k(54), k(8));
+  g.lineStyle(k(5), 0x8a5a2b).lineBetween(k(54), k(8), k(62), k(-6));
+  g.fillStyle(0xe9f7ff, 0.85).fillCircle(k(68), k(-20), k(14));
+  g.lineStyle(k(4), C.ink).strokeCircle(k(68), k(-20), k(14));
+  // 몸통 + 평행사변형 배지
+  g.fillStyle(C.mint).fillRoundedRect(k(-36), k(4), k(72), k(58), k(16));
+  g.lineStyle(k(4), C.ink).strokeRoundedRect(k(-36), k(4), k(72), k(58), k(16));
+  const badge = [P(k(-18), k(46)), P(k(6), k(46)), P(k(16), k(22)), P(k(-8), k(22))];
+  g.fillStyle(C.yellow).fillPoints(badge, true); g.lineStyle(k(3), C.ink).strokePoints(badge, true);
+  // 머리
+  g.fillStyle(C.blue).fillRoundedRect(k(-52), k(-42), k(10), k(22), k(4)).fillRoundedRect(k(42), k(-42), k(10), k(22), k(4));
+  g.fillStyle(0x8fd3ff).fillRoundedRect(k(-44), k(-62), k(88), k(64), k(18));
+  g.lineStyle(k(4), C.ink).strokeRoundedRect(k(-44), k(-62), k(88), k(64), k(18));
+  g.fillStyle(C.ink).fillRoundedRect(k(-34), k(-52), k(68), k(42), k(12));
+  g.fillStyle(0x7cffcb).fillCircle(k(-14), k(-36), k(6)).fillCircle(k(14), k(-36), k(6));
+  g.lineStyle(k(3), 0x7cffcb); g.beginPath(); g.arc(0, k(-28), k(9), 0.3, Math.PI - 0.3, false); g.strokePath();
+  g.lineStyle(k(4), C.ink).lineBetween(0, k(-62), 0, k(-78));
+  g.fillStyle(C.red).fillCircle(0, k(-82), k(7));
+  scene.tweens.add({ targets: c, y: y - 5, duration: 900, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
+  return c;
+}
+function makePpittul(scene, x, y, s = 1) {
+  const c = scene.add.container(x, y), g = scene.add.graphics(); c.add(g);
+  const k = v => v * s;
+  g.fillStyle(0x1b2340, 0.12).fillEllipse(0, k(68), k(80), k(14));
+  g.lineStyle(k(5), C.ink).lineBetween(k(-14), k(44), k(-20), k(64)).lineBetween(k(14), k(44), k(22), k(64));
+  g.lineStyle(k(5), C.ink).lineBetween(k(-38), k(4), k(-58), k(-12)).lineBetween(k(42), k(0), k(62), k(14));
+  const body = [P(k(-40), k(-38)), P(k(34), k(-48)), P(k(46), k(44)), P(k(-34), k(50))];
+  g.fillStyle(0xb48cff).fillPoints(body, true); g.lineStyle(k(5), C.ink).strokePoints(body, true);
+  g.fillStyle(0xff6fa8).fillTriangle(k(-30), k(-38), k(-16), k(-40), k(-28), k(-60)).fillTriangle(k(16), k(-44), k(30), k(-46), k(30), k(-66));
+  g.fillStyle(0xffffff).fillCircle(k(-14), k(-12), k(11)).fillCircle(k(16), k(-16), k(8));
+  g.fillStyle(C.ink).fillCircle(k(-11), k(-10), k(5)).fillCircle(k(18), k(-14), k(4));
+  g.lineStyle(k(4), C.ink); g.beginPath(); g.moveTo(k(-18), k(16)); g.lineTo(k(-9), k(24)); g.lineTo(k(0), k(16)); g.lineTo(k(9), k(24)); g.lineTo(k(18), k(14)); g.strokePath();
+  c.wob = scene.tweens.add({ targets: c, angle: { from: -6, to: 6 }, duration: 700, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
+  return c;
+}
+
+function drawBuildingIcon(g, i, cx, cy, s = 1) {
+  const k = v => v * s;
+  g.fillStyle(0x1b2340, 0.1).fillEllipse(cx, cy + k(62), k(120), k(14));
+  if (i === 0) {          // 창문 공장
+    g.fillStyle(0xffd6a5).fillRect(cx - k(46), cy - k(10), k(92), k(70)); g.lineStyle(3, C.ink).strokeRect(cx - k(46), cy - k(10), k(92), k(70));
+    g.fillStyle(0xff8f7a).fillTriangle(cx - k(56), cy - k(10), cx + k(56), cy - k(10), cx, cy - k(56)); g.lineStyle(3, C.ink).strokeTriangle(cx - k(56), cy - k(10), cx + k(56), cy - k(10), cx, cy - k(56));
+    g.fillStyle(0xbfa58a).fillRect(cx + k(20), cy - k(62), k(14), k(26));
+    para(g, cx - k(36), cy + k(4), k(24), k(20), k(6), C.glass); para(g, cx + k(8), cy + k(4), k(24), k(20), k(6), C.glass);
+    g.fillStyle(0x8a5a2b).fillRect(cx - k(9), cy + k(32), k(18), k(28));
+  } else if (i === 1) {   // 아파트
+    g.fillStyle(0xa0c4ff).fillRect(cx - k(36), cy - k(60), k(72), k(120)); g.lineStyle(3, C.ink).strokeRect(cx - k(36), cy - k(60), k(72), k(120));
+    for (let r = 0; r < 5; r++) for (let q = 0; q < 3; q++) para(g, cx - k(28) + q * k(21), cy - k(52) + r * k(22), k(12), k(14), k(4), C.glass);
+  } else if (i === 2) {   // 회전 타워
+    for (let r = 0; r < 5; r++) {
+      const y = cy + k(46) - r * k(24), off = Math.sin(r * 0.9) * k(10);
+      const pts = [P(cx - k(32) + off, y - k(22)), P(cx + k(32) + off, y - k(22)), P(cx + k(32) - off * 0.4, y), P(cx - k(32) - off * 0.4, y)];
+      g.fillStyle([0x9bf6ff, 0xbdb2ff, 0x9bf6ff, 0xbdb2ff, 0x9bf6ff][r]).fillPoints(pts, true); g.lineStyle(3, C.ink).strokePoints(pts, true);
+    }
+    g.lineStyle(3, C.ink).lineBetween(cx, cy - k(76), cx, cy - k(92)); g.fillStyle(C.red).fillCircle(cx, cy - k(94), k(5));
+  } else if (i === 3) {   // 박물관
+    g.fillStyle(0xfdf3c4).fillRect(cx - k(54), cy + k(44), k(108), k(16)); g.lineStyle(3, C.ink).strokeRect(cx - k(54), cy + k(44), k(108), k(16));
+    for (let q = 0; q < 4; q++) { g.fillStyle(0xffffff).fillRect(cx - k(44) + q * k(26), cy - k(14), k(12), k(58)); g.lineStyle(2, C.ink).strokeRect(cx - k(44) + q * k(26), cy - k(14), k(12), k(58)); }
+    g.fillStyle(0xfdf3c4).fillRect(cx - k(54), cy - k(24), k(108), k(12)); g.lineStyle(3, C.ink).strokeRect(cx - k(54), cy - k(24), k(108), k(12));
+    g.fillStyle(0xffd6a5).fillTriangle(cx - k(58), cy - k(24), cx + k(58), cy - k(24), cx, cy - k(62)); g.lineStyle(3, C.ink).strokeTriangle(cx - k(58), cy - k(24), cx + k(58), cy - k(24), cx, cy - k(62));
+  } else {                // 우주 정거장
+    para(g, cx - k(74), cy - k(14), k(40), k(28), k(10), C.blue); para(g, cx + k(36), cy - k(14), k(40), k(28), k(-10), C.blue);
+    g.fillStyle(0xd0bfff).fillCircle(cx, cy, k(34)); g.lineStyle(3, C.ink).strokeCircle(cx, cy, k(34));
+    g.fillStyle(C.glass).fillCircle(cx, cy, k(14)); g.lineStyle(2, C.ink).strokeCircle(cx, cy, k(14));
+    g.fillStyle(0xffffff).fillTriangle(cx + k(36), cy - k(60), cx + k(48), cy - k(60), cx + k(42), cy - k(80));
+    g.fillStyle(C.red).fillRect(cx + k(36), cy - k(60), k(12), k(22));
+    g.fillStyle(0xffd84d).fillCircle(cx - k(46), cy - k(52), k(4)).fillCircle(cx + k(60), cy + k(40), k(3));
+  }
+}
+
+function openPause(scene) {
+  if (scene.paused) return;
+  scene.paused = true;
+  const W = scene.scale.width, H = scene.scale.height, objs = [];
+  objs.push(scene.add.rectangle(W / 2, H / 2, W, H, 0x1b2340, 0.5).setDepth(900).setInteractive());
+  const pg = scene.add.graphics().setDepth(901);
+  pg.fillStyle(0xffffff).fillRoundedRect(W / 2 - 230, H / 2 - 170, 460, 340, 28);
+  objs.push(pg, txt(scene, W / 2, H / 2 - 110, '⏸ 잠깐 멈춤', 38).setOrigin(0.5).setDepth(902));
+  objs.push(new Btn(scene, W / 2, H / 2 - 10, 320, 76, '▶ 계속하기', { fontSize: 28, fill: 0xd7f7e6, onClick: () => { objs.forEach(o => o.destroy()); scene.paused = false; } }).setDepth(902));
+  objs.push(new Btn(scene, W / 2, H / 2 + 92, 320, 76, '🗺️ 도시 지도로', { fontSize: 28, onClick: () => scene.scene.start('StageSelectScene') }).setDepth(902));
+}
+
+// ---- 재미 연출: 조각 터뜨리기, 배너, 색연필 빔, 도장, 삐뚤이 HP, 부품 건물 ----
+function burst(scene, x, y, colors = [C.red, C.blue, C.yellow, C.green, 0xb48cff], n = 22) {
+  for (let i = 0; i < n; i++) {
+    const g = scene.add.graphics().setDepth(70);
+    para(g, -7, -5, 12, 10, 3, pick(colors), false);
+    g.setPosition(x, y).setAngle(ri(0, 360));
+    const a = Math.random() * Math.PI * 2, d = ri(70, 190);
+    scene.tweens.add({ targets: g, x: x + Math.cos(a) * d, y: y + Math.sin(a) * d + 30, angle: g.angle + ri(-360, 360), alpha: 0,
+      scale: { from: 1.5, to: 0.4 }, duration: ri(600, 1000), ease: 'Cubic.easeOut', onComplete: () => g.destroy() });
+  }
+}
+function banner(scene, text, color = '#e8453c', size = 64) {
+  const t = txt(scene, scene.scale.width / 2, scene.scale.height * 0.38, text, size, color, { stroke: '#ffffff', strokeThickness: 12 })
+    .setOrigin(0.5).setDepth(90).setScale(0).setAngle(-6);
+  scene.tweens.add({ targets: t, scale: 1, angle: 0, duration: 320, ease: 'Back.easeOut',
+    onComplete: () => scene.tweens.add({ targets: t, alpha: 0, y: t.y - 50, delay: 600, duration: 400, onComplete: () => t.destroy() }) });
+}
+function shootBeam(scene, from, to, color = C.red) {
+  return new Promise(res => {
+    sfx.whoosh();
+    const c = scene.add.container(from.x, from.y).setDepth(85), g = scene.add.graphics();
+    g.fillStyle(color).fillRect(-20, -7, 32, 14); g.fillStyle(0xffd0c8).fillTriangle(12, -7, 12, 7, 26, 0);
+    g.lineStyle(2, C.ink).strokeRect(-20, -7, 32, 14);
+    c.add(g).setRotation(Math.atan2(to.y - from.y, to.x - from.x));
+    const trail = scene.time.addEvent({ delay: 25, loop: true, callback: () => {
+      const d = scene.add.circle(c.x, c.y, ri(4, 9), pick([color, C.yellow, 0xffffff]), 0.9).setDepth(84);
+      scene.tweens.add({ targets: d, alpha: 0, scale: 0.2, duration: 380, onComplete: () => d.destroy() });
+    } });
+    scene.tweens.add({ targets: c, x: to.x, y: to.y, duration: 380, ease: 'Quad.easeIn', onComplete: () => {
+      trail.remove(); c.destroy(); burst(scene, to.x, to.y, [C.yellow, 0xffffff, color], 12); res();
+    } });
+  });
+}
+function stampAt(scene, x, y, text, color, r) {
+  const c = scene.add.container(x, y).setDepth(60), g = scene.add.graphics();
+  g.lineStyle(7, color, 0.95).strokeCircle(0, 0, r);
+  g.lineStyle(3, color, 0.95).strokeCircle(0, 0, r - 10);
+  c.add([g, txt(scene, 0, 0, text, Math.round(r * 0.6), Phaser.Display.Color.IntegerToColor(color).rgba, { stroke: '#ffffff', strokeThickness: 6 }).setOrigin(0.5)]);
+  c.setAngle(-14).setScale(2.4).setAlpha(0);
+  scene.tweens.add({ targets: c, scale: 1, alpha: 0.92, duration: 240, ease: 'Back.easeOut', onComplete: () => scene.cameras.main.shake(120, 0.003) });
+  return c;
+}
+
+class VillainHud {
+  // cfg: {x, y, s, barX, barY, barW, bubbleX, bubbleY}
+  constructor(scene, cfg, maxHp) {
+    this.scene = scene; this.cfg = cfg; this.maxHp = maxHp; this.hp = maxHp; this.shown = maxHp;
+    this.v = makePpittul(scene, cfg.x, cfg.y, cfg.s).setDepth(30);
+    txt(scene, cfg.barX, cfg.barY - 4, '😈 삐뚤이 HP', 18, '#7a3fd1').setOrigin(0, 1).setDepth(30);
+    this.bar = scene.add.graphics().setDepth(30);
+    this.bubble = scene.add.container(cfg.bubbleX, cfg.bubbleY).setDepth(75).setVisible(false);
+    this.bubbleG = scene.add.graphics();
+    this.bubbleT = txt(scene, 0, 0, '', 20, '#4a2a8a', { align: 'center', wordWrap: { width: 220, useAdvancedWrap: true } }).setOrigin(0.5);
+    this.bubble.add([this.bubbleG, this.bubbleT]);
+    this.drawBar();
+  }
+  pos() { return P(this.cfg.x, this.cfg.y); }
+  drawBar() {
+    const c = this.cfg, g = this.bar, f = Math.max(0, this.shown / this.maxHp);
+    g.clear();
+    g.fillStyle(0x1b2340, 0.15).fillRoundedRect(c.barX, c.barY, c.barW, 16, 8);
+    if (f > 0.01) g.fillStyle(f > 0.5 ? 0xb48cff : (f > 0.25 ? C.orange : C.red)).fillRoundedRect(c.barX, c.barY, Math.max(16, c.barW * f), 16, 8);
+    g.lineStyle(2, C.ink, 0.6).strokeRoundedRect(c.barX, c.barY, c.barW, 16, 8);
+  }
+  talk(s, dur = 2000) {
+    const sc = this.scene, c = this.cfg;
+    this.bubbleT.setText(s);
+    const w = this.bubbleT.width + 30, h = this.bubbleT.height + 20, g = this.bubbleG;
+    const d = unitV(sub(P(c.x, c.y), P(c.bubbleX, c.bubbleY))), B = P(d.x * (w / 2 - 12), d.y * (h / 2 - 6)), T = add(B, mul(d, 26)), p = mul(P(-d.y, d.x), 9);
+    g.clear();
+    g.fillStyle(0xffffff, 0.97).fillTriangle(B.x + p.x, B.y + p.y, B.x - p.x, B.y - p.y, T.x, T.y);
+    g.lineStyle(3, 0xb48cff).strokeTriangle(B.x + p.x, B.y + p.y, B.x - p.x, B.y - p.y, T.x, T.y);
+    g.fillStyle(0xffffff, 0.97).fillRoundedRect(-w / 2, -h / 2, w, h, 14);
+    g.lineStyle(3, 0xb48cff).strokeRoundedRect(-w / 2, -h / 2, w, h, 14);
+    this.bubble.setVisible(true).setScale(0.5);
+    sc.tweens.add({ targets: this.bubble, scale: 1, duration: 200, ease: 'Back.easeOut' });
+    if (this.hideEv) this.hideEv.remove();
+    this.hideEv = sc.time.delayedCall(dur, () => this.bubble.setVisible(false));
+  }
+  hit(n, line) {
+    const sc = this.scene, c = this.cfg;
+    this.hp = Math.max(0, this.hp - n);
+    sfx.hit();
+    sc.tweens.addCounter({ from: this.shown, to: this.hp, duration: 450, onUpdate: t => { this.shown = t.getValue(); this.drawBar(); } });
+    sc.tweens.add({ targets: this.v, x: c.x + 10, duration: 45, yoyo: true, repeat: 4, onComplete: () => { this.v.x = c.x; } });
+    sc.tweens.add({ targets: this.v, scaleX: 1.3, scaleY: 0.7, duration: 90, yoyo: true });
+    floatText(sc, c.x, c.y - 40 * c.s, `-${n}`, '#d63b2f');
+    this.talk(line || pick(HIT_FAKE));
+  }
+  laugh(line) {
+    const sc = this.scene, y0 = this.cfg.y;
+    sfx.laugh();
+    sc.tweens.add({ targets: this.v, y: y0 - 16, duration: 110, yoyo: true, repeat: 2, onComplete: () => { this.v.y = y0; } });
+    this.talk(line || pick(LAUGH));
+  }
+  ko() {
+    const sc = this.scene;
+    this.talk('으아아~ 기억해 두겠다!', 2600);
+    sc.tweens.killTweensOf(this.v);
+    sc.tweens.add({ targets: this.v, x: sc.scale.width + 160, y: this.v.y - 90, angle: 900, duration: 1300, delay: 500, ease: 'Cubic.easeIn' });
+  }
+}
+
+// 진짜 부품은 '오늘 짓는 층'에 끼우고, 가짜는 쓰레기통으로
+class PartsTray {
+  constructor(scene, portrait) {
+    this.scene = scene; this.pt = portrait; this.slots = []; this.filled = 0; this.trash = 0;
+    const g = scene.add.graphics().setDepth(4);
+    if (!portrait) {
+      const x = 778, y = 300, w = 144, h = 184;
+      txt(scene, x + w / 2, y - 22, '🏗️ 오늘 짓는 층', 19).setOrigin(0.5, 1);
+      g.fillStyle(0x5b6787).fillTriangle(x - 8, y - 2, x + w + 8, y - 2, x + w / 2, y - 18);
+      g.fillStyle(0xfff6e0).fillRect(x, y, w, h); g.lineStyle(3, C.ink).strokeRect(x, y, w, h);
+      for (let r = 2; r >= 0; r--) for (let c = 0; c < 2; c++) this.slots.push({ x: x + 39 + c * 66, y: y + 33 + r * 59, s: 46 });
+      this.trashT = txt(scene, x + w / 2, y + h + 8, '🗑️ 압수한 가짜 ×0', 19, '#c0392b').setOrigin(0.5, 0);
+    } else {
+      txt(scene, 430, 102, '🏗️ 오늘 짓는 층', 18);
+      for (let i = 0; i < 5; i++) this.slots.push({ x: 452 + i * 50, y: 160, s: 42 });
+      this.trashT = txt(scene, 692, 102, '🗑️ ×0', 18, '#c0392b').setOrigin(1, 0);
+    }
+    this.slots.forEach(s => {
+      g.fillStyle(0xffffff, 0.85).fillRoundedRect(s.x - s.s / 2 - 3, s.y - s.s / 2 - 3, s.s + 6, s.s + 6, 8);
+      g.lineStyle(2, C.ink, 0.25).strokeRoundedRect(s.x - s.s / 2 - 3, s.y - s.s / 2 - 3, s.s + 6, s.s + 6, 8);
+    });
+  }
+  addReal(view) {
+    const sc = this.scene;
+    this.minis = this.minis || [];
+    // 칸이 다 차면 한 층 완성 → 보너스를 주고 칸을 비운다
+    if (this.minis.length >= this.slots.length) {
+      this.minis.forEach(m => sc.tweens.add({ targets: m, alpha: 0, y: m.y - 30, duration: 300, onComplete: () => m.destroy() }));
+      this.minis = [];
+      if (RUN) { RUN.score += 50; if (sc.updateHud) sc.updateHud(); }
+      floatText(sc, this.slots[0].x, this.slots[0].y - 40, '🏗️ 한 층 완성! +50', '#1f8f57');
+    }
+    const s = this.slots[this.minis.length];
+    this.filled++;
+    view.labelsOn = false; view.showGrid = false; view.ext = {}; view.answerMode = false; sfx.whoosh();
+    const Rl = Math.max(...view.q.verts.map(p => len(sub(p, view.c)))) || 1;
+    return new Promise(res => sc.tweens.add({ targets: view, cx: s.x, cy: s.y, unit: s.s / 2 / Rl, duration: 520, ease: 'Cubic.easeIn',
+      onUpdate: () => view.draw(),
+      onComplete: () => {
+        view.destroy();
+        const g = sc.add.graphics().setDepth(6);
+        drawMiniShape(g, view.q.verts, 0, 0, s.s, 0xc9f0ff, view.rot, 2);
+        this.minis.push(g);
+        g.setPosition(s.x, s.y).setScale(1.5);
+        sc.tweens.add({ targets: g, scale: 1, duration: 220, ease: 'Back.easeOut' });
+        burst(sc, s.x, s.y, [C.yellow, C.green, 0xffffff], 8);
+        sfx.mark(); res();
+      } }));
+  }
+  addFake(view) {
+    const sc = this.scene;
+    view.labelsOn = false; view.showGrid = false; view.ext = {}; sfx.whoosh();
+    return new Promise(res => sc.tweens.add({ targets: view, cy: view.cy + 520, rot: view.rot + 1.4, unit: view.unit * 0.5, duration: 560, ease: 'Back.easeIn',
+      onUpdate: () => view.draw(),
+      onComplete: () => {
+        view.destroy(); this.trash++;
+        this.trashT.setText(this.pt ? `🗑️ ×${this.trash}` : `🗑️ 압수한 가짜 ×${this.trash}`);
+        sc.tweens.add({ targets: this.trashT, scale: { from: 1.5, to: 1 }, duration: 260, ease: 'Back.easeOut' });
+        res();
+      } }));
+  }
+}
+
+function topBar(scene, title, h) {
+  const W = scene.scale.width, g = scene.add.graphics().setDepth(10);
+  g.fillStyle(0xffffff, 0.88).fillRect(0, 0, W, h);
+  g.lineStyle(3, C.ink, 0.15).lineBetween(0, h, W, h);
+  const portrait = scene.scale.height > W, fs = portrait ? 24 : 28, cy = h / 2;
+  txt(scene, 16, cy, title, fs).setOrigin(0, 0.5).setDepth(11);
+  const prog = txt(scene, portrait ? W * 0.53 : W * 0.5, cy, '', fs).setOrigin(0.5).setDepth(11);
+  const score = txt(scene, portrait ? W * 0.74 : W * 0.68, cy, '', fs, '#b8860b').setOrigin(0.5).setDepth(11);
+  makeMuteBtn(scene, W - 106, cy).setDepth(11);
+  new Btn(scene, W - 40, cy, 56, 50, '⏸', { fontSize: 26, onClick: () => openPause(scene) }).setDepth(11);
+  return { prog, score };
+}
+
+/* =====================================================================
+   ④ 장면(Scene) : Title → Story → Tutorial → StageSelect → Play → Boss → Result → Ending
+   ===================================================================== */
+class BootScene extends Phaser.Scene {
+  constructor() { super('BootScene'); }
+  create() {
+    const el = document.getElementById('loading'); if (el) el.remove();
+    this.scene.start(BootScene.firstKey || 'TitleScene');
+  }
+}
+
+class TitleScene extends Phaser.Scene {
+  constructor() { super('TitleScene'); }
+  create() {
+    const W = this.scale.width, H = this.scale.height, pt = H > W;
+    drawBg(this);
+    // 떠다니는 평행사변형 장식
+    for (let i = 0; i < 9; i++) {
+      const g = this.add.graphics();
+      para(g, -30, -20, 50, 40, ri(-14, 14), pick([0xffffff, 0xfff1a8, 0xd0f5e6, 0xe3d9ff]), false);
+      g.setPosition(ri(40, W - 40), ri(40, H - 40)).setAlpha(0.55).setAngle(ri(-30, 30));
+      this.tweens.add({ targets: g, y: g.y - ri(20, 50), angle: g.angle + ri(-20, 20), duration: ri(2500, 4000), yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
+    }
+    txt(this, W / 2, pt ? 120 : 80, '2050 미래 도시 건축 탐정단', pt ? 28 : 30, '#5b6787').setOrigin(0.5);
+    const t = txt(this, W / 2, pt ? 240 : 170, pt ? '🕵️ 가짜 평행사변형을\n찾아라' : '🕵️ 가짜 평행사변형을 찾아라', pt ? 62 : 66, C.inkS,
+      { stroke: '#ffffff', strokeThickness: 12, align: 'center' }).setOrigin(0.5);
+    this.tweens.add({ targets: t, scale: 1.03, duration: 1200, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
+    makePara(this, pt ? W * 0.27 : W * 0.15, pt ? 520 : 440, pt ? 1.4 : 1.5);
+    makePpittul(this, pt ? W * 0.74 : W * 0.85, pt ? 530 : 450, pt ? 1.3 : 1.4);
+    if (!pt) {
+      txt(this, W * 0.15, 580, '건축 탐정 패럴', 22).setOrigin(0.5);
+      txt(this, W * 0.85, 580, '장난꾸러기 삐뚤이', 22).setOrigin(0.5);
+    }
+    const iy = pt ? 740 : 330;
+    txt(this, W / 2, iy - 58, '탐정 이름(닉네임)을 적어 주세요', 24, '#5b6787').setOrigin(0.5);
+    const dom = this.add.dom(W / 2, iy).createFromHTML(
+      '<input id="nick" maxlength="10" placeholder="예: 꼼꼼탐정" autocomplete="off" ' +
+      'style="width:340px;font-size:30px;padding:12px 16px;border-radius:16px;border:3px solid #26324d;text-align:center;outline:none;background:#fff;color:#26324d">');
+    const input = dom.node.querySelector('input');
+    input.value = loadAll().last || '';   // 이 기기에서 마지막으로 한 탐정 이름
+    const nameOf = () => (input.value || '').trim().slice(0, 10) || '탐정';
+    // mode: 'new' = 새로 시작, 'continue' = 이어하기, 'retry' = 처음부터 재도전(최고 기록은 유지)
+    const go = mode => {
+      const name = nameOf();
+      loadProfile(name);
+      if (mode === 'retry') restartRun(); else saveGS();
+      started = true;
+      const next = () => mode === 'new' ? this.scene.start('StoryScene') : this.scene.start('StageSelectScene', { retry: mode === 'retry' });
+      if (document.fonts && document.fonts.load) Promise.race([document.fonts.load('30px "Jua"', name), new Promise(r => setTimeout(r, 800))]).then(next, next);
+      else next();
+    };
+    const by = pt ? 870 : 440;
+    const startBtn = new Btn(this, W / 2, by, 300, 90, '🚀 시작하기', { fontSize: 36, fill: 0xffe08a, onClick: () => go('new') });
+    const contBtn = new Btn(this, W / 2 - 165, by, 310, 90, '▶ 이어하기', { fontSize: 34, fill: 0xffe08a, onClick: () => go('continue') });
+    const retryBtn = new Btn(this, W / 2 + 165, by, 310, 90, '🔄 처음부터 재도전', { fontSize: 28, fill: 0xffffff, onClick: () => go('retry') });
+    const info = txt(this, W / 2, by + 68, '', 21, '#5b6787', { align: 'center' }).setOrigin(0.5);
+    // 입력한 이름으로 저장된 기록이 있으면 이어하기·재도전 버튼을 보여 준다
+    const refresh = () => {
+      const p = loadAll().profiles[nameOf()];
+      const has = !!p && !!input.value.trim();
+      startBtn.setVisible(!has); contBtn.setVisible(has); retryBtn.setVisible(has);
+      if (has) {
+        const st = STAGES.map((_, i) => Object.assign(blankStage(), p.stages && p.stages[i]));
+        const floors = st.filter(s => s.done).length, best = st.reduce((a, s) => a + s.best, 0);
+        info.setText(`📂 저장된 기록: 내 건물 ${floors}/5층 · 🏆 최고 기록 합계 ${best}점\n재도전하면 층은 처음부터, 최고 기록은 그대로 남아요`);
+      } else info.setText('');
+    };
+    input.addEventListener('input', refresh);
+    input.addEventListener('keydown', e => { if (e.key === 'Enter') { sfx.tap(); go(contBtn.visible ? 'continue' : 'new'); } });
+    refresh();
+    txt(this, W / 2, H - 30, '초등학교 4학년 수학 · 사각형 · 정리 활동', 20, '#5b6787').setOrigin(0.5);
+    makeMuteBtn(this, W - 44, 40);
+  }
+}
+
+class StoryScene extends Phaser.Scene {
+  constructor() { super('StoryScene'); }
+  create() {
+    const W = this.scale.width, H = this.scale.height, pt = H > W;
+    drawBg(this);
+    this.idx = 0;
+    const capH = pt ? 300 : 190, artH = H - capH - 40;
+    this.art = this.add.container(0, 0);
+    const cg = this.add.graphics().setDepth(5);
+    cg.fillStyle(0xffffff, 0.94).fillRoundedRect(30, H - capH - 20, W - 60, capH, 26);
+    cg.lineStyle(4, C.ink, 0.3).strokeRoundedRect(30, H - capH - 20, W - 60, capH, 26);
+    this.cap = txt(this, W / 2, H - capH / 2 - 30, '', pt ? 30 : 30, C.inkS, { align: 'center', wordWrap: { width: W - 140, useAdvancedWrap: true }, lineSpacing: 8 }).setOrigin(0.5).setDepth(6);
+    this.pageT = txt(this, W - 60, H - 46, '', 20, '#5b6787').setOrigin(1, 0.5).setDepth(6);
+    this.cuts = [
+      { text: '2050년 미래 도시!\n새로 짓는 건물의 외벽과 창문은 모두 평행사변형 부품으로 만들어야 해요.', draw: c => this.cutCity(c, W, artH) },
+      { text: '그런데 장난꾸러기 삐뚤이가 변을 살짝 비틀어 가짜 평행사변형 부품을 몰래 섞어 놓았어요!\n가짜 부품을 쓰면 건물이 무너질 수도 있어요.', draw: c => this.cutVillain(c, W, artH) },
+      { text: `${GS.name} 탐정님, 건축 탐정 패럴과 함께\n🖍️ 색연필 스캐너로 가짜를 찾아내 주세요!`, draw: c => this.cutHero(c, W, artH) },
+    ];
+    new Btn(this, W - 110, 46, 190, 58, '건너뛰기 ▶▶', { fontSize: 24, onClick: () => this.scene.start('TutorialScene') }).setDepth(10);
+    this.input.on('pointerdown', () => this.next());
+    this.show();
+  }
+  show() {
+    this.art.removeAll(true);
+    this.cuts[this.idx].draw(this.art);
+    this.art.setAlpha(0); this.tweens.add({ targets: this.art, alpha: 1, duration: 350 });
+    this.cap.setText(this.cuts[this.idx].text);
+    this.pageT.setText(`탭해서 넘기기 (${this.idx + 1}/3)`);
+  }
+  next() {
+    sfx.tap();
+    this.idx++;
+    if (this.idx >= this.cuts.length) { this.scene.start('TutorialScene'); return; }
+    this.show();
+  }
+  cutCity(c, W, h) {
+    const g = this.add.graphics(); c.add(g);
+    g.fillStyle(0xfff1a8).fillCircle(W * 0.82, h * 0.25, 50);
+    const base = h - 10;
+    const cols = [0xa0c4ff, 0xbdb2ff, 0x9bf6ff, 0xffd6a5, 0xcaffbf, 0xa0c4ff, 0xbdb2ff];
+    for (let i = 0; i < 7; i++) {
+      const bw = W / 9, x = W * 0.08 + i * bw * 1.18, bh = h * (0.35 + ((i * 37) % 40) / 100);
+      g.fillStyle(cols[i]).fillRect(x, base - bh, bw, bh); g.lineStyle(3, C.ink).strokeRect(x, base - bh, bw, bh);
+      for (let yy = base - bh + 16; yy < base - 30; yy += 34) for (let xx = x + 10; xx < x + bw - 30; xx += 32) para(g, xx, yy, 18, 22, 6, C.glass);
+    }
+    const car = this.add.graphics(); c.add(car);
+    car.fillStyle(C.red).fillEllipse(0, 0, 90, 30); car.fillStyle(C.glass).fillEllipse(8, -10, 40, 20); car.lineStyle(3, C.ink).strokeEllipse(0, 0, 90, 30);
+    car.setPosition(-60, h * 0.22);
+    this.tweens.add({ targets: car, x: W + 80, duration: 5000, repeat: -1 });
+  }
+  cutVillain(c, W, h) {
+    c.add(makePpittul(this, W / 2, h * 0.55, 2.2));
+    const g = this.add.graphics(); c.add(g);
+    [[0.18, 0.3], [0.8, 0.28], [0.22, 0.72], [0.78, 0.72]].forEach(([x, y], i) => {
+      const cx = W * x, cy = h * y, s = 34, wob = [P(-s, -s * 0.6), P(s * 0.9, -s * 0.8), P(s * 1.2, s * 0.7), P(-s * 0.7, s * 0.6)];
+      g.fillStyle(0xffe0dc).fillPoints(wob.map(p => add(p, P(cx, cy))), true); g.lineStyle(4, C.ink).strokePoints(wob.map(p => add(p, P(cx, cy))), true);
+    });
+    ['?', '?', '!'].forEach((s, i) => {
+      const t = txt(this, W * (0.3 + i * 0.2), h * 0.15, s, 54, '#e8453c').setOrigin(0.5); c.add(t);
+      this.tweens.add({ targets: t, y: t.y - 14, duration: 500 + i * 120, yoyo: true, repeat: -1 });
+    });
+  }
+  cutHero(c, W, h) {
+    c.add(makePara(this, W / 2, h * 0.55, 2.2));
+    const g = this.add.graphics(); c.add(g);
+    g.lineStyle(10, C.red).lineBetween(W * 0.15, h * 0.3, W * 0.32, h * 0.3).lineBetween(W * 0.12, h * 0.42, W * 0.29, h * 0.42);
+    g.lineStyle(10, C.blue).lineBetween(W * 0.7, h * 0.25, W * 0.76, h * 0.45).lineBetween(W * 0.82, h * 0.25, W * 0.88, h * 0.45);
+    drawChevrons(g, P(W * 0.15, h * 0.3), P(W * 0.32, h * 0.3), 1, C.redD, 8);
+    drawChevrons(g, P(W * 0.12, h * 0.42), P(W * 0.29, h * 0.42), 1, C.redD, 8);
+    drawChevrons(g, P(W * 0.7, h * 0.25), P(W * 0.76, h * 0.45), 2, C.blueD, 8);
+    drawChevrons(g, P(W * 0.82, h * 0.25), P(W * 0.88, h * 0.45), 2, C.blueD, 8);
+    const t = txt(this, W / 2, h * 0.12, '건축 탐정단 출동!', 44, C.inkS, { stroke: '#fff', strokeThickness: 10 }).setOrigin(0.5); c.add(t);
+  }
+}
+
+function playLayout(W, H) {
+  if (W > H) return {
+    top: 70, play: { x: 20, y: 84, w: 920, h: 470 }, tools: { x: 956, y: 84, w: 304, h: 470, cols: 1 },
+    bottom: { x: 20, y: 566, w: 1240, h: 144 }, portrait: false,
+  };
+  return {
+    top: 76, play: { x: 16, y: 90, w: 688, h: 650 }, tools: { x: 16, y: 752, w: 688, h: 150, cols: 4 },
+    bottom: { x: 16, y: 914, w: 688, h: 350 }, portrait: true,
+  };
+}
+
+// 하단: 패럴 말풍선 + 판정 버튼 (PlayScene·BossScene 공용)
+function buildBottom(scene, L, withJudge) {
+  const r = L.bottom, g = scene.add.graphics();
+  g.fillStyle(0xffffff, 0.85).fillRoundedRect(r.x, r.y, r.w, r.h, 22);
+  g.lineStyle(3, C.ink, 0.2).strokeRoundedRect(r.x, r.y, r.w, r.h, 22);
+  let msgBox, jb;
+  const paraPos = L.portrait ? P(r.x + 74, r.y + 100) : P(r.x + 70, r.y + r.h / 2 - 4);
+  if (!L.portrait) {
+    makePara(scene, r.x + 70, r.y + r.h / 2 - 4, 0.72);
+    msgBox = { x: r.x + 140, y: r.y + 12, w: withJudge ? 640 : r.w - 160, h: r.h - 24 };
+    jb = { y: r.y + r.h / 2, x1: r.x + r.w - 350, x2: r.x + r.w - 118, w: 220, h: 108 };
+  } else {
+    makePara(scene, r.x + 74, r.y + 100, 0.8);
+    msgBox = { x: r.x + 150, y: r.y + 14, w: r.w - 164, h: withJudge ? 196 : r.h - 28 };
+    jb = { y: r.y + r.h - 70, x1: r.x + r.w * 0.25 + 4, x2: r.x + r.w * 0.75 - 4, w: 320, h: 108 };
+  }
+  // 말풍선: 정답이면 초록, 오답이면 빨강으로 바뀐다
+  const boxG = scene.add.graphics();
+  const ty = L.portrait ? msgBox.y + 30 : msgBox.y + msgBox.h / 2;
+  const drawBox = mood => {
+    const fill = mood === 'good' ? 0xdff8e8 : mood === 'bad' ? 0xffe1dd : 0xf3f8ff;
+    const line = mood === 'good' ? C.green : mood === 'bad' ? C.red : C.ink;
+    boxG.clear();
+    boxG.fillStyle(fill, 1).fillRoundedRect(msgBox.x, msgBox.y, msgBox.w, msgBox.h, 16);
+    boxG.lineStyle(mood ? 4 : 2, line, mood ? 0.9 : 0.25).strokeRoundedRect(msgBox.x, msgBox.y, msgBox.w, msgBox.h, 16);
+    boxG.fillStyle(fill, 1).fillTriangle(msgBox.x + 2, ty - 12, msgBox.x + 2, ty + 12, msgBox.x - 14, ty);
+  };
+  drawBox(null);
+  const msg = txt(scene, msgBox.x + 18, msgBox.y + msgBox.h / 2, '', 22, C.inkS, { wordWrap: { width: msgBox.w - 34, useAdvancedWrap: true }, lineSpacing: 5 }).setOrigin(0, 0.5);
+  const say = (s, mood = null) => {
+    drawBox(mood);
+    msg.setText(s).setColor(mood === 'good' ? '#17673f' : mood === 'bad' ? '#a3231c' : C.inkS);
+    scene.tweens.killTweensOf(msg);
+    scene.tweens.add({ targets: msg, x: { from: msgBox.x + 26, to: msgBox.x + 18 }, duration: 160 });
+  };
+  return { say, jb, msgBox, paraPos };
+}
+
+class PlayScene extends Phaser.Scene {
+  constructor(key = 'PlayScene') { super(key); }
+  init(data) {
+    this.isTutorial = this.scene.key === 'TutorialScene';
+    this.stageIdx = this.isTutorial ? 0 : (data && data.stage) || 0;
+    this.cfg = STAGES[this.stageIdx];
+  }
+  create() {
+    const W = this.W = this.scale.width, H = this.H = this.scale.height;
+    this.L = playLayout(W, H);
+    drawBg(this);
+    this.paused = false; this.locked = true; this.view = null; this.timerOn = false;
+    RUN = { stage: this.stageIdx, score: 0, wrongByType: {}, wrongQs: 0, hints: 0, wrongList: [], combo: 0, answered: 0, firstCorrect: 0, ko: 0 };
+    this.timeLeft = STAGE_SEC; this.lastSec = STAGE_SEC; this.stageOver = false;
+    this.extendsLeft = 3;
+    this.gridOn = this.cfg.grid;
+    const title = this.isTutorial ? '📖 탐정 훈련 (연습)' : `${this.cfg.icon} ${this.cfg.no}단계 ${this.cfg.name}`;
+    const tb = topBar(this, title, this.L.top);
+    this.progText = tb.prog; this.scoreText = tb.score;
+    this.buildPlayArea(); this.buildTools();
+    const b = buildBottom(this, this.L, true);
+    this.say = b.say; this.paraPos = b.paraPos;
+    const jb = b.jb;
+    this.realBtn = new Btn(this, jb.x1, jb.y, jb.w, jb.h, '✅ 진짜\n평행사변형', { fontSize: 27, fill: 0xd7f7e6, stroke: 0x1f8f57,
+      onClick: () => this.judge('real'), onDisabled: () => this.needMark() });
+    this.fakeBtn = new Btn(this, jb.x2, jb.y, jb.w, jb.h, '❌ 가짜\n평행사변형', { fontSize: 27, fill: 0xffe0dc, stroke: 0xc0392b,
+      onClick: () => this.judge('fake'), onDisabled: () => this.needMark() });
+    this.nextBtn = new Btn(this, (jb.x1 + jb.x2) / 2, jb.y, jb.x2 - jb.x1 + jb.w, jb.h, '다음 부품 ▶', { fontSize: 32, fill: 0xffe08a, onClick: () => this.nextQuestion() });
+    this.nextBtn.setVisible(false);
+    this.questions = this.isTutorial ? [this.tutorialQuestion()] : buildStageQuestions(this.stageIdx);
+    this.qIndex = 0;
+    this.tutStep = 0;
+    this.leaving = false; this.mainStamp = null;
+    const pt = this.L.portrait;
+    this.hud = new VillainHud(this, pt
+      ? { x: 76, y: 152, s: 0.55, barX: 140, barY: 152, barW: 262, bubbleX: 300, bubbleY: 290 }
+      : { x: 845, y: 150, s: 0.6, barX: 778, barY: 212, barW: 144, bubbleX: 640, bubbleY: 150 }, this.isTutorial ? 1 : 8);
+    this.tray = new PartsTray(this, pt);
+    this.input.on('pointerdown', p => this.onPointer(p));
+    this.showQuestion();
+  }
+  tutorialQuestion() {
+    const vs = normalize([P(0, 0), P(5, 0), P(7, 3), P(2, 3)]);
+    return { id: ++QID, type: 'PARA', verts: vs, pairs: pairFlags(vs), count: 2, answer: 'real', rot: 0 };
+  }
+  buildPlayArea() {
+    const r = this.L.play, g = this.add.graphics();
+    g.fillStyle(0xffffff, 0.8).fillRoundedRect(r.x, r.y, r.w, r.h, 22);
+    this.frameG = this.add.graphics().setDepth(3);
+    this.setFrame(null);
+    const tPad = this.isTutorial ? 0 : 34;
+    // 가로: 오른쪽 기둥에 삐뚤이·건물 / 세로: 위쪽 띠에 삐뚤이·건물
+    if (this.L.portrait) {
+      this.shapeRect = { x: r.x + 14, y: r.y + 172, w: r.w - 28, h: r.h - 186 - tPad };
+      g.lineStyle(3, C.ink, 0.12).lineBetween(r.x + 16, r.y + 132, r.x + r.w - 16, r.y + 132);
+    } else {
+      this.shapeRect = { x: r.x + 14, y: r.y + 40, w: 716, h: r.h - 50 - tPad };
+      g.lineStyle(3, C.ink, 0.12).lineBetween(r.x + 740, r.y + 14, r.x + 740, r.y + r.h - 14 - tPad);
+    }
+    const sr = this.shapeRect;
+    this.timerG = this.add.graphics().setDepth(20);
+    this.comboText = txt(this, sr.x + sr.w - 4, sr.y - 30, '', 24, '#e8453c').setOrigin(1, 0).setDepth(20);
+    this.qTag = txt(this, sr.x + 4, sr.y - 30, '', 21, '#5b6787').setDepth(20);
+  }
+  buildTools() {
+    const r = this.L.tools, pt = this.L.portrait;
+    const defs = [
+      { key: 'red', label: ['🖍️ 빨강 색연필', '🖍️ 빨강'], fill: 0xffe3e1, act: () => this.setColor('red') },
+      { key: 'blue', label: ['🖍️ 파랑 색연필', '🖍️ 파랑'], fill: 0xe0ecff, act: () => this.setColor('blue') },
+      { key: 'eraser', label: ['🧽 지우개', '🧽 지우개'], act: () => this.erase() },
+      { key: 'grid', label: ['📐 모눈', '📐 모눈'], act: () => this.toggleGrid() },
+      { key: 'ext', label: ['📏 늘이기', '📏 늘이기'], act: () => this.toggleExtend() },
+      { key: 'hint', label: ['💡 힌트 (별 −1)', '💡 힌트'], act: () => this.useHint() },
+    ];
+    if (this.cfg.mustMark) defs.push({ key: 'none', label: ['🚫 평행한 변 없음', '🚫 평행 없음'], act: () => this.declareNone() });
+    const n = defs.length, gap = 8;
+    let cols = r.cols, rows = Math.ceil(n / cols);
+    const w = (r.w - (cols - 1) * gap) / cols, h = Math.min(64, (r.h - (rows - 1) * gap) / rows);
+    this.tools = {};
+    defs.forEach((d, i) => {
+      const cx = r.x + (i % cols) * (w + gap) + w / 2, cy = r.y + Math.floor(i / cols) * (h + gap) + h / 2;
+      this.tools[d.key] = new Btn(this, cx, cy, w, h, d.label[pt ? 1 : 0], { fontSize: pt ? 22 : 24, fill: d.fill || 0xffffff, onClick: d.act,
+        onDisabled: () => { if (this.isTutorial) this.say('훈련에서는 반짝이는 변만 눌러 보세요!'); } });
+    });
+  }
+  updateTools() {
+    const t = this.tools, pt = this.L.portrait;
+    t.red.setSelected(this.curColor === 'red');
+    t.blue.setSelected(this.curColor === 'blue');
+    t.grid.setLabel(this.gridOn ? (pt ? '📐 모눈 끄기' : '📐 모눈 끄기') : '📐 모눈 켜기').setSelected(this.gridOn);
+    t.ext.setLabel(`📏 늘이기 (${this.extendsLeft})`).setSelected(!!this.extendMode).setEnabled(this.extendsLeft > 0);
+    t.hint.setEnabled(!this.hintUsed);
+    if (t.none) t.none.setSelected(!!this.declaredNone);
+    if (this.isTutorial) Object.values(t).forEach(b => b.setEnabled(false));
+  }
+  updateHud() {
+    if (this.isTutorial) this.progText.setText('연습 1/1');
+    this.scoreText.setText(`⭐ ${RUN.score}`);
+    this.comboText.setText(RUN.combo >= 2 ? `🔥 ${RUN.combo}연속 정답${RUN.combo >= 3 ? ' ×1.5' : ''}` : '');
+  }
+  updateJudge() {
+    if (this.isTutorial) { this.realBtn.setEnabled(this.tutStep >= 4); this.fakeBtn.setEnabled(false); return; }
+    const ok = !this.cfg.mustMark || this.view.marks.red !== null || this.view.marks.blue !== null || this.declaredNone;
+    this.realBtn.setEnabled(ok); this.fakeBtn.setEnabled(ok);
+  }
+  needMark() {
+    if (this.isTutorial) { this.say(this.tutStep >= 4 ? '두 쌍이 모두 평행하니까… ✅ 진짜 버튼을 눌러요!' : '먼저 반짝이는 변을 눌러 색연필로 칠해 보세요!'); return; }
+    sfx.soft();
+    this.say('🖍️ 판정하기 전에 평행한 변을 색연필로 먼저 칠해 보세요! (평행한 변이 없다고 생각하면 🚫 버튼)');
+  }
+  promptText() {
+    if (this.isTutorial) return `👋 ${GS.name} 탐정님, 반가워요! 먼저 반짝이는 변 ㄱㄴ을 톡 눌러 보세요.`;
+    const rule = '평행한 변을 모두 색연필로 칠하고(하나도 없으면 🚫), 진짜인지 가짜인지 골라요. 표시까지 정확해야 정답!';
+    return this.qIndex === 0 ? `${this.cfg.intro}\n${rule}` : rule;
+  }
+  showQuestion() {
+    const q = this.q = this.questions[this.qIndex];
+    q.attempts = 0; q.firstTry = null; q.markScored = false;
+    this.hintUsed = false; this.declaredNone = false; this.extendMode = false; this.timedOut = false; this.curColor = 'red';
+    if (this.view) this.view.destroy();
+    const spin = this.cfg.rotate === 'spin' && q.rot !== 0;
+    const v = this.view = new ShapeView(this, q, this.shapeRect, { grid: this.gridOn, startRot: spin ? 0 : q.rot, circleFit: q.rot !== 0, maxUnit: 64 });
+    this.qTag.setText(this.isTutorial ? '' : `${RUN.answered + 1}번째 부품 · 맞힌 개수 ${RUN.firstCorrect}`);
+    this.realBtn.setVisible(true); this.fakeBtn.setVisible(true); this.nextBtn.setVisible(false);
+    this.updateTools(); this.updateJudge(); this.updateHud();
+    if (this.isTutorial) v.highlight = [0];
+    this.timerOn = false; this.drawTimer();
+    this.setFrame(null);
+    const ready = () => {
+      this.locked = false; this.qStart = this.time.now;
+      this.say(this.promptText());
+      if (!this.isTutorial) this.timerOn = true;   // 60초 시계는 문제를 푸는 동안만 흐른다
+      if (!this.isTutorial && Math.random() < 0.5) this.hud.talk(pick(TAUNT));
+    };
+    // 컨베이어처럼 오른쪽에서 밀려 들어오기
+    this.locked = true;
+    const cx0 = v.cx; v.cx = this.shapeRect.x + this.shapeRect.w + 300; v.labelsOn = false;
+    sfx.whoosh();
+    this.say(spin ? '🌀 부품이 빙글빙글 돌면서 들어와요...' : '🚚 새 부품이 들어와요!');
+    this.tweens.add({ targets: v, cx: cx0, duration: 520, ease: 'Back.easeOut', onComplete: () => {
+      v.labelsOn = true;
+      if (spin) this.tweens.addCounter({ from: 0, to: q.rot, duration: 1500, ease: 'Cubic.easeOut', onUpdate: t => { v.rot = t.getValue(); }, onComplete: ready });
+      else ready();
+    } });
+  }
+  update(t, dt) {
+    if (this.view) this.view.draw();
+    if (!this.isTutorial && !this.timerOn) this.drawTimer();
+    if (this.timerOn && !this.paused && !this.locked) {
+      this.timeLeft -= dt / 1000;
+      const sec = Math.ceil(this.timeLeft);
+      if (sec !== this.lastSec) { this.lastSec = sec; if (sec <= 5 && sec > 0) sfx.tick(); }
+      if (this.timeLeft <= 0) { this.timeLeft = 0; this.stageTimeUp(); }
+      this.drawTimer();
+    }
+  }
+  drawTimer() {
+    const g = this.timerG; g.clear();
+    if (this.isTutorial) return;
+    const r = this.L.play, x = r.x + 20, w = r.w - 40, y = r.y + r.h - 24, f = Math.max(0, (this.timeLeft || 0) / STAGE_SEC);
+    g.fillStyle(0xdde1e8).fillRoundedRect(x, y, w, 12, 6);
+    g.fillStyle(!(this.timerOn && !this.locked) && !this.stageOver ? 0xaab4c8 : f < 0.34 ? C.red : (f < 0.67 ? C.orange : C.green)).fillRoundedRect(x, y, Math.max(12, w * f), 12, 6);
+    // 정답 확인·설명 중에는 시계가 멈춘다는 것을 ⏸로 보여 준다
+    const running = this.timerOn && !this.locked && !this.paused;
+    this.progText.setText(`⏱ ${Math.ceil(this.timeLeft || 0)}초${running || this.stageOver ? '' : ' ⏸'}`);
+  }
+  onPointer(p) {
+    if (this.paused || this.locked || !this.view) return;
+    if (!this.view.contains(p.x, p.y)) return;
+    const e = this.view.edgeAt(p.x, p.y);
+    if (e === null) return;
+    if (this.extendMode) {
+      this.extendMode = false;
+      if (this.view.ext[e]) { this.say('이미 늘인 변이에요. 다른 변을 골라 보세요.'); this.updateTools(); return; }
+      this.extendsLeft--; sfx.mark();
+      this.view.extend([e], C.gray);
+      this.updateTools();
+      this.say(`📏 변 ${EDGE_NAMES[e]}을 양쪽으로 늘였어요. 마주 보는 변도 늘이면 만날까요?`);
+      return;
+    }
+    if (this.isTutorial) {
+      const want = [0, 2, 1, 3][this.tutStep];
+      if (e !== want) { sfx.soft(); this.say('반짝이는 변을 눌러 보세요!'); return; }
+    }
+    this.tapEdge(e);
+  }
+  tapEdge(e) {
+    const v = this.view;
+    if (v.selected === null) {
+      v.selected = e; sfx.mark();
+      if (this.isTutorial) this.tutAdvance();
+      else this.say(`변 ${EDGE_NAMES[e]}을 골랐어요. 이 변과 평행한 것 같은 변을 하나 더 눌러요!`);
+      return;
+    }
+    if (v.selected === e) { v.selected = null; sfx.soft(); this.say('선택을 취소했어요.'); return; }
+    const a = v.selected; v.selected = null;
+    if ((a + e) % 2 === 1) {
+      sfx.soft();
+      v.highlight = [a, e];
+      this.time.delayedCall(1000, () => { if (this.view === v) v.highlight = null; });
+      this.say(`이웃한 변은 만나기 때문에 평행할 수 없어요! 변 ${EDGE_NAMES[a]}과 마주 보는 변을 골라 보세요.`);
+      return;
+    }
+    const p = a % 2, col = this.curColor, other = col === 'red' ? 'blue' : 'red';
+    v.marks[col] = p;
+    if (v.marks[other] === p) v.marks[other] = null;
+    if (v.marks[other] === null) this.curColor = other;
+    this.declaredNone = false;
+    sfx.pair();
+    this.updateTools(); this.updateJudge();
+    if (this.isTutorial) { this.tutAdvance(); return; }
+    const both = v.marks.red !== null && v.marks.blue !== null;
+    this.say(`${PAIR_NAMES[p]}을 ${col === 'red' ? '빨강' : '파랑'} 색연필로 칠했어요! ` + (both ? '두 쌍을 모두 칠했어요. 이제 판정해요!' : '다른 쌍도 살펴보고, 진짜인지 가짜인지 골라요.'));
+  }
+  tutAdvance() {
+    this.tutStep++;
+    const v = this.view;
+    const steps = {
+      1: () => { v.highlight = [2]; this.say('좋아요! 이번엔 ㄱㄴ과 마주 보는 변 ㄹㄷ을 눌러요. 두 변은 아무리 늘여도 만나지 않아요.'); },
+      2: () => { v.highlight = [1]; this.say('빨강 색연필로 칠해졌어요! 화살표 1개(>)는 ‘평행’ 표시예요. 이제 변 ㄴㄷ을 눌러요.'); },
+      3: () => { v.highlight = [3]; this.say('마지막으로 ㄴㄷ과 마주 보는 변 ㄱㄹ을 눌러요!'); },
+      4: () => { v.highlight = null; this.updateJudge(); this.say('파랑은 화살표 2개(>>)! 평행한 변이 두 쌍이에요. 마주 보는 두 쌍의 변이 모두 평행하면 진짜 평행사변형! ✅ 진짜 버튼을 눌러요.'); },
+    };
+    if (steps[this.tutStep]) steps[this.tutStep]();
+  }
+  setColor(c) { this.curColor = c; this.updateTools(); this.say(`🖍️ ${c === 'red' ? '빨강(화살표 1개)' : '파랑(화살표 2개)'} 색연필을 골랐어요. 평행한 변 두 개를 차례로 눌러요.`); }
+  erase() {
+    if (this.locked) return;
+    const v = this.view; v.marks = { red: null, blue: null }; v.selected = null;
+    this.declaredNone = false; this.curColor = 'red';
+    this.updateTools(); this.updateJudge();
+    this.say('🧽 색연필 표시를 모두 지웠어요.');
+  }
+  toggleGrid() { this.gridOn = !this.gridOn; this.view.showGrid = this.gridOn; this.updateTools(); this.say(this.gridOn ? '📐 모눈을 켰어요. 칸을 세어 변의 기울어진 정도를 비교해 봐요.' : '📐 모눈을 껐어요.'); }
+  toggleExtend() {
+    if (this.locked) return;
+    if (this.extendsLeft <= 0) { this.say('📏 늘이기는 이번 단계에서 다 썼어요!'); return; }
+    this.extendMode = !this.extendMode; this.view.selected = null;
+    this.updateTools();
+    this.say(this.extendMode ? `📏 늘여 볼 변을 눌러 보세요. (이번 단계 남은 횟수 ${this.extendsLeft}번)` : '늘이기를 취소했어요.');
+  }
+  declareNone() {
+    if (this.locked) return;
+    const v = this.view; v.marks = { red: null, blue: null }; v.selected = null;
+    this.declaredNone = !this.declaredNone; this.curColor = 'red';
+    this.updateTools(); this.updateJudge();
+    this.say(this.declaredNone ? '🚫 평행한 변이 하나도 없다고 표시했어요. 이제 판정해 보세요!' : '🚫 표시를 취소했어요.');
+  }
+  useHint() {
+    if (this.locked) return;
+    if (this.hintUsed) { this.say('💡 힌트는 문제마다 한 번만 쓸 수 있어요.'); return; }
+    this.hintUsed = true; RUN.hints++;
+    const q = this.q, cand = [0, 1].filter(p => q.answer === 'fake' ? !q.pairs[p] : true), p = pick(cand);
+    this.view.highlight = PAIR_EDGES[p];
+    const v = this.view;
+    this.time.delayedCall(3500, () => { if (this.view === v) v.highlight = null; });
+    const tail = (this.gridOn && q.rot === 0) ? '모눈 칸을 따라 두 변이 기울어진 정도를 비교해 봐요.' : '📏 늘이기 도구로 늘여 봐도 좋아요.';
+    this.updateTools();
+    this.say(`💡 평행한 변이 몇 쌍인지 세어 보세요! 반짝이는 ${PAIR_NAMES[p]}을 양쪽으로 쭉 늘이면 만날까요? ${tail} (별 −1)`);
+  }
+  addScore(n) {
+    if (n <= 0) return;
+    RUN.score += n; this.updateHud();
+    const r = this.L.play;
+    floatText(this, r.x + r.w / 2, r.y + 70, `+${n}`);
+  }
+  shapeCenter() { const S = this.view.S; return mul(S.reduce((a, s) => add(a, s), P(0, 0)), 0.25); }
+  scan() {
+    return new Promise(res => {
+      const r = this.shapeRect, g = this.add.graphics().setDepth(40);
+      const label = txt(this, r.x + r.w / 2, r.y + 6, '🔍 색연필 스캐너 작동 중...', 22, '#1446a8', { stroke: '#ffffff', strokeThickness: 5 }).setOrigin(0.5, 0).setDepth(41);
+      sfx.scan();
+      this.tweens.addCounter({ from: 0, to: 1, duration: 560, ease: 'Sine.easeInOut',
+        onUpdate: t => { const y = r.y + r.h * t.getValue(); g.clear(); g.fillStyle(0x7cffcb, 0.2).fillRect(r.x, y - 46, r.w, 46); g.lineStyle(4, 0x2bd4a0, 0.95).lineBetween(r.x, y, r.x + r.w, y); },
+        onComplete: () => { g.destroy(); label.destroy(); res(); } });
+    });
+  }
+  markedPairs() { return [...new Set(['red', 'blue'].map(c => this.view.marks[c]).filter(p => p !== null))]; }
+  judge(choice, noScan = false) {
+    if (this.locked || this.paused) return;
+    const v = this.view;
+    // 칠한 것과 판정이 서로 맞지 않으면 시도로 세지 않고 다시 생각하게 한다 (찍기 방지)
+    if (choice) {
+      const n = this.declaredNone ? 0 : this.markedPairs().length;
+      if (choice === 'real' && n < 2) {
+        sfx.soft();
+        this.say(n === 0
+          ? '🤔 잠깐! 평행한 변이 없다고 했는데 진짜라고요? 진짜 평행사변형이라면 평행한 변이 두 쌍이어야 해요.'
+          : '🤔 잠깐! 평행한 변을 한 쌍만 칠했어요. 진짜 평행사변형이라면 마주 보는 두 쌍이 모두 평행해야 해요. 다른 쌍도 확인해 보세요!');
+        return;
+      }
+      if (choice === 'fake' && n === 2) {
+        sfx.soft();
+        this.say('🤔 잠깐! 두 쌍 모두 평행하다고 칠했는데 가짜라고요? 칠한 것과 판정이 서로 달라요. 다시 확인해 보세요!');
+        return;
+      }
+    }
+    this.locked = true; this.timerOn = false; this.extendMode = false; v.selected = null; v.highlight = null;
+    const elapsed = this.time.now - (this.qStart || this.time.now);
+    this.updateTools();
+    if (noScan) this.resolve(choice, elapsed);
+    else this.scan().then(() => this.resolve(choice, elapsed));
+  }
+  resolve(choice, elapsed) {
+    const q = this.q, v = this.view;
+    q.attempts++;
+    // 정답 = 판정이 맞고 + 평행한 변을 정확히 칠했을 때 (판정만 찍어서는 정답이 아님)
+    const marked = this.declaredNone ? [] : this.markedPairs();
+    const truePairs = [0, 1].filter(p => q.pairs[p]);
+    const wrongMarks = marked.filter(p => !q.pairs[p]);
+    const missed = truePairs.filter(p => !marked.includes(p));
+    const judgedOk = choice === q.answer;
+    const marksOk = choice !== null && wrongMarks.length === 0 && missed.length === 0;
+    const correct = judgedOk && marksOk;
+    this.lastCorrect = correct;
+    const first = q.attempts === 1;
+    this.updateTools();
+    if (correct) {
+      if (first) { q.firstTry = true; RUN.combo++; if (!this.isTutorial) RUN.firstCorrect++; } else RUN.combo = 0;
+      let pts = first ? (RUN.combo >= 3 ? 150 : 100) + Math.max(1, truePairs.length) * 30 : 50;
+      const c = this.shapeCenter();
+      if (first && elapsed < 8000 && !this.isTutorial) {
+        pts += 20;
+        this.time.delayedCall(900, () => floatText(this, c.x, c.y - 40, '⚡ 번개 판정 +20', '#e09b00'));
+      }
+      this.feedback(true);
+      this.addScore(pts);
+      burst(this, c.x, c.y);
+      if (first && RUN.combo >= 3) { sfx.combo(); this.time.delayedCall(700, () => banner(this, `🔥 ${RUN.combo} 콤보!`)); }
+      if (q.answer === 'fake') { const sr = this.shapeRect; this.mainStamp = stampAt(this, sr.x + sr.w - 76, sr.y + 70, '가짜!', C.red, 58); }
+      if (first) shootBeam(this, this.paraPos, this.hud.pos(), q.answer === 'real' ? C.blue : C.red)
+        .then(() => {
+          this.hud.hit(1, pick(q.answer === 'real' ? HIT_REAL : HIT_FAKE));
+          if (this.hud.hp <= 0 && !this.isTutorial) this.koVillain();
+        });
+      else this.hud.talk('휴~ 두 번째에 맞혔으니 이번엔 봐줄게!');
+      if (q.answer === 'real' && !this.isTutorial) GS.parts.push({ verts: q.verts, rot: q.rot });
+      const head = (first ? '⭕ 정답! ' : '⭕ 재도전 성공! (점수 절반) ') + (q.answer === 'real' ? '진짜 평행사변형이에요.' : `가짜를 찾아냈어요. (${TYPE_INFO[q.type].name})`);
+      this.say(this.isTutorial
+        ? '🎉 정답! 이렇게 평행한 변을 색연필로 칠하고, 두 쌍이 모두 평행한지 확인해서 판정하면 돼요. 이제 미래 도시로 출동!'
+        : head + '\n' + explain(q), 'good');
+      this.revealAnswer().then(() => this.showNext());
+    } else {
+      RUN.combo = 0; q.firstTry = false;
+      RUN.wrongByType[q.type] = (RUN.wrongByType[q.type] || 0) + 1;
+      this.feedback(false);
+      this.hud.laugh(this.timedOut ? '시간 끝~ 히히!' : undefined);
+      if (q.attempts < 2 && !this.timedOut) {
+        let why;
+        if (wrongMarks.length) why = '색연필로 칠한 두 변은 평행하지 않아요. 늘여 보면 만나요!';
+        else if (this.declaredNone && missed.length) why = '평행한 변이 없다고 했지만, 평행한 변이 숨어 있어요!';
+        else if (missed.length) why = '평행한 변을 빠뜨렸어요. 마주 보는 두 쌍을 하나씩 다시 살펴봐요.';
+        else why = '마주 보는 두 쌍의 변이 모두 평행한지 다시 확인해 봐요.';
+        const head = judgedOk ? `❌ 아깝다! ${choice === 'real' ? '진짜' : '가짜'}인 건 맞지만 색연필 표시가 틀렸어요.` : '❌ 오답!';
+        this.say(`${head} ${why}\n🖍️ 다시 칠하고 판정해요. (재도전 1번, 점수 절반)`, 'bad');
+        // 표시를 지워서 다시 생각하고 칠해야만 재도전할 수 있게
+        const pr = wrongMarks.length ? v.extend(wrongMarks.flatMap(p => PAIR_EDGES[p]), C.orange, 900) : Promise.resolve();
+        pr.then(() => this.time.delayedCall(700, () => {
+          v.marks = { red: null, blue: null }; this.declaredNone = false; this.curColor = 'red'; this.setFrame(null);
+          this.locked = false; this.qStart = this.time.now;
+          this.updateTools(); this.updateJudge();
+          if (!this.isTutorial) this.timerOn = true;
+        }));
+      } else {
+        const pre = this.timedOut ? '⏰ 시간 초과! ' : '❌ 오답! ';
+        this.say(`${pre}이 부품은 ${q.answer === 'real' ? '진짜' : '가짜'} 평행사변형이에요. (${TYPE_INFO[q.type].name})\n${explain(q)}`, 'bad');
+        this.revealAnswer().then(() => this.showNext());
+      }
+    }
+    this.updateHud();
+  }
+  // 정답/오답을 한눈에: 화면 번쩍임 + 큰 ⭕/❌ + 테두리 색 + 패럴 반응 + 다른 소리
+  feedback(ok) {
+    const W = this.W, H = this.H, sr = this.shapeRect, cx = sr.x + sr.w / 2, cy = sr.y + sr.h / 2;
+    const col = ok ? C.green : C.red;
+    if (ok) sfx.ding(); else sfx.buzz();
+    const ov = this.add.rectangle(W / 2, H / 2, W, H, col, ok ? 0.28 : 0.34).setDepth(94);
+    this.tweens.add({ targets: ov, alpha: 0, duration: 750, ease: 'Quad.easeIn', onComplete: () => ov.destroy() });
+    const c = this.add.container(cx, cy).setDepth(96), g = this.add.graphics();
+    g.fillStyle(0xffffff, 0.85).fillCircle(0, 0, 108);
+    if (ok) { g.lineStyle(24, col, 1).strokeCircle(0, 0, 80); }
+    else { g.lineStyle(26, col, 1).lineBetween(-64, -64, 64, 64).lineBetween(64, -64, -64, 64); }
+    const label = txt(this, 0, 128, ok ? '정답!' : '오답!', 58, ok ? '#1f8f57' : '#d63b2f', { stroke: '#ffffff', strokeThickness: 10 }).setOrigin(0.5);
+    c.add([g, label]).setScale(0.3);
+    this.tweens.add({ targets: c, scale: 1, duration: 280, ease: 'Back.easeOut',
+      onComplete: () => this.tweens.add({ targets: c, alpha: 0, scale: 1.15, delay: 650, duration: 280, onComplete: () => c.destroy() }) });
+    if (!ok) this.cameras.main.shake(260, 0.008);
+    this.setFrame(ok ? 'good' : 'bad');
+    const pp = this.paraPos;
+    floatText(this, pp.x + 40, pp.y - 70, ok ? '😆' : '😢', '#ffffff');
+  }
+  setFrame(mood) {
+    const r = this.L.play, g = this.frameG; g.clear();
+    const col = mood === 'good' ? C.green : mood === 'bad' ? C.red : C.ink;
+    g.lineStyle(mood ? 8 : 4, col, mood ? 0.9 : 0.22).strokeRoundedRect(r.x, r.y, r.w, r.h, 22);
+  }
+  // 60초가 다 되면 풀던 문제는 그대로 두고(감점 없음) 보스 라운드로
+  stageTimeUp() {
+    if (this.stageOver) return;
+    this.stageOver = true; this.timerOn = false; this.locked = true;
+    if (this.view) this.view.selected = null;
+    this.realBtn.setVisible(false); this.fakeBtn.setVisible(false); this.nextBtn.setVisible(false);
+    sfx.win();
+    banner(this, '⏱ 시간 끝!', '#1446a8', 76);
+    this.say(`⏱ 60초 끝! ${RUN.answered}개의 부품을 검사했고, ${RUN.firstCorrect}개를 한 번에 맞혔어요. 이제 삐뚤이가 숨어 있는 건물 외벽으로 가요!`, 'good');
+    this.time.delayedCall(2200, () => this.scene.start('BossScene', { stage: this.stageIdx }));
+  }
+  // 삐뚤이 HP를 다 깎으면 KO 보너스, 그리고 다시 일어난다 (60초 안에 몇 번 KO 시킬 수 있을까?)
+  koVillain() {
+    RUN.ko++;
+    RUN.score += 200; this.updateHud();
+    sfx.win();
+    banner(this, `💥 삐뚤이 KO! +200`, '#7a3fd1', 60);
+    burst(this, this.hud.cfg.x, this.hud.cfg.y, undefined, 30);
+    this.hud.talk('으으… 아직 안 끝났어! 다시 간다!', 2200);
+    this.time.delayedCall(900, () => { this.hud.hp = this.hud.maxHp; this.hud.shown = this.hud.maxHp; this.hud.drawBar(); });
+  }
+  revealAnswer() {
+    const v = this.view;
+    v.marks = { red: null, blue: null }; v.answerMode = true; v.highlight = null;
+    const edges = [0, 1].filter(p => !this.q.pairs[p]).flatMap(p => PAIR_EDGES[p]);
+    return edges.length ? v.extend(edges, C.orange, 1000) : new Promise(r => this.time.delayedCall(500, r));
+  }
+  showNext() {
+    this.realBtn.setVisible(false); this.fakeBtn.setVisible(false);
+    this.nextBtn.setLabel(this.isTutorial ? '🗺️ 미래 도시로 출동!' : '다음 부품 ▶');
+    this.nextBtn.setVisible(true);
+    if (this.isTutorial) return;
+    RUN.answered++;
+    // 맞혔으면 잠깐 뒤 자동으로 다음 부품 (틀렸을 때는 설명을 읽고 직접 누른다)
+    const q = this.q;
+    if (this.lastCorrect) this.time.delayedCall(1400, () => { if (this.q === q && !this.leaving) this.nextQuestion(); });
+  }
+  nextQuestion() {
+    if (this.isTutorial) { this.scene.start('StageSelectScene'); return; }
+    if (this.leaving) return;
+    this.leaving = true; this.nextBtn.setVisible(false);
+    const q = this.q, v = this.view, st = this.mainStamp;
+    if (q.firstTry === false) { RUN.wrongQs++; RUN.wrongList.push(q); }
+    this.view = null; this.mainStamp = null;
+    if (st) this.tweens.add({ targets: st, y: st.y + 520, alpha: 0, angle: 60, duration: 560, ease: 'Back.easeIn', onComplete: () => st.destroy() });
+    (q.answer === 'real' ? this.tray.addReal(v) : this.tray.addFake(v)).then(() => {
+      this.leaving = false;
+      this.qIndex++;
+      // 60초 동안 문제가 끊이지 않도록 다 쓰면 새로 만들어 붙인다
+      if (this.qIndex >= this.questions.length) this.questions.push(...buildStageQuestions(this.stageIdx));
+      this.showQuestion();
+    });
+  }
+}
+
+class TutorialScene extends PlayScene {
+  constructor() { super('TutorialScene'); }
+}
+
+class BossScene extends Phaser.Scene {
+  constructor() { super('BossScene'); }
+  init(d) { this.stageIdx = d.stage || 0; this.cfg = STAGES[this.stageIdx]; }
+  create() {
+    const W = this.scale.width, H = this.scale.height, pt = H > W, cfg = this.cfg, b = cfg.boss;
+    drawBg(this);
+    this.paused = false; this.locked = false; this.found = 0; this.mistakes = 0; this.wins = [];
+    const tb = topBar(this, `${cfg.icon} ${cfg.no}단계 보스: 외벽 검사`, pt ? 76 : 70);
+    tb.prog.setText('문제 6/6'); this.scoreText = tb.score; this.scoreText.setText(`⭐ ${RUN.score}`);
+    const L = pt
+      ? { facade: { x: 40, y: 200, w: 640, h: 690 }, bottom: { x: 16, y: 914, w: 688, h: 350 }, portrait: true }
+      : { facade: { x: 150, y: 128, w: 980, h: 420 }, bottom: { x: 20, y: 566, w: 1240, h: 144 }, portrait: false };
+    const F = this.facade = L.facade, g = this.add.graphics();
+    // 건물 외벽
+    g.fillStyle(0x1b2340, 0.12).fillRect(F.x + 10, F.y + 10, F.w, F.h);
+    g.fillStyle([0xffe9c7, 0xd6e6ff, 0xd8fbff, 0xfff6d6, 0xe8e0ff][this.stageIdx]).fillRect(F.x, F.y, F.w, F.h);
+    g.lineStyle(5, C.ink).strokeRect(F.x, F.y, F.w, F.h);
+    g.fillStyle(0x5b6787).fillRect(F.x - 20, F.y - 24, F.w + 40, 26);
+    g.lineStyle(4, C.ink).strokeRect(F.x - 20, F.y - 24, F.w + 40, 26);
+    this.hud = new VillainHud(this, pt
+      ? { x: F.x + F.w - 70, y: F.y - 66, s: 0.75, barX: F.x + 250, barY: F.y - 64, barW: 220, bubbleX: F.x + F.w - 250, bubbleY: F.y + 70 }
+      : { x: 1205, y: 260, s: 0.8, barX: 1142, barY: 350, barW: 126, bubbleX: 1040, bubbleY: 150 }, b.fakeCount);
+    this.villain = this.hud.v;
+    const sign = txt(this, F.x + 20, F.y - 12, `🔍 창문 ${b.n}개 중 가짜 ${b.fakeCount}개를 모두 찾아 톡! 눌러요`, pt ? 22 : 22, '#ffffff').setOrigin(0, 0.5).setDepth(12);
+    if (pt) sign.setFontSize(20);
+    // 창문 배치
+    const types = [];
+    for (let i = 0; i < b.fakeCount; i++) types.push(b.fakes[i % b.fakes.length]);
+    while (types.length < b.n) types.push(pick(b.reals));
+    const order = shuffle(types);
+    const cols = pt ? 2 : (b.n <= 6 ? 3 : 4), rows = Math.ceil(b.n / cols), pad = 18;
+    const cw = (F.w - pad * (cols + 1)) / cols, ch = (F.h - pad * (rows + 1)) / rows;
+    const seen = new Set();
+    for (let s = 0; s < cols * rows; s++) {
+      const x = F.x + pad + (s % cols) * (cw + pad), y = F.y + pad + Math.floor(s / cols) * (ch + pad);
+      if (s >= b.n) {   // 빈 칸 → 출입문
+        const dw = Math.min(cw * 0.5, 110), dh = ch * 0.9;
+        g.fillStyle(0x8a5a2b).fillRoundedRect(x + cw / 2 - dw / 2, y + ch - dh, dw, dh, { tl: 14, tr: 14, bl: 0, br: 0 });
+        g.lineStyle(4, C.ink).strokeRoundedRect(x + cw / 2 - dw / 2, y + ch - dh, dw, dh, { tl: 14, tr: 14, bl: 0, br: 0 });
+        g.fillStyle(C.yellow).fillCircle(x + cw / 2 + dw / 4, y + ch - dh / 2, 6);
+        continue;
+      }
+      g.fillStyle(0x5b6787).fillRoundedRect(x - 5, y - 5, cw + 10, ch + 10, 12);
+      g.fillStyle(0xf6fbff).fillRoundedRect(x, y, cw, ch, 10);
+      const q = makeQuestion(order[s], cfg, { obvious: true, subtle: false, big: false, maxW: 7, maxH: 5, avoid: seen });
+      seen.add(sig(q.verts));
+      const inner = { x: x + 8, y: y + 8, w: cw - 16, h: ch - 16 };
+      const view = new ShapeView(this, q, inner, { labels: false, lineW: 5, grid: cfg.grid && q.rot === 0, maxUnit: 40, pad: 0.5, circleFit: q.rot !== 0, fill: 0xdff3ff });
+      const win = { q, view, done: false, cx: x + cw / 2, cy: y + ch / 2, w: cw, h: ch };
+      this.wins.push(win);
+      this.add.zone(win.cx, win.cy, cw, ch).setInteractive({ useHandCursor: true }).on('pointerdown', () => this.tapWindow(win));
+    }
+    const bt = buildBottom(this, L, true);
+    this.say = bt.say; this.paraPos = bt.paraPos;
+    this.time.delayedCall(900, () => this.hud.talk(pick(BOSS_TAUNT)));
+    this.time.addEvent({ delay: 7000, loop: true, callback: () => { if (!this.locked && !this.paused) this.hud.talk(pick(BOSS_TAUNT)); } });
+    this.nextBtn = new Btn(this, pt ? W / 2 : W - 254, pt ? L.bottom.y + L.bottom.h - 70 : L.bottom.y + L.bottom.h / 2, pt ? 640 : 440, pt ? 108 : 104, '📊 결과 보기 ▶',
+      { fontSize: 30, fill: 0xffe08a, onClick: () => this.scene.start('ResultScene', { stage: this.stageIdx }) }).setDepth(40).setVisible(false);
+    this.say(`🏢 보스 라운드! 삐뚤이가 이 건물 외벽에 가짜 창문 ${b.fakeCount}개를 숨겼어요. 가짜 창문을 모두 찾아 눌러 주세요!`);
+  }
+  update() { this.wins.forEach(w => w.view.draw()); }
+  stamp(win, text, color) {
+    const r = Math.min(win.w, win.h) * 0.22;
+    const c = this.add.container(win.cx + win.w / 2 - r - 4, win.cy - win.h / 2 + r + 4).setDepth(25);
+    const g = this.add.graphics();
+    g.lineStyle(5, color, 0.95).strokeCircle(0, 0, r);
+    g.fillStyle(0xffffff, 0.85).fillCircle(0, 0, r - 3);
+    c.add([g, txt(this, 0, 0, text, Math.round(r * 0.55), Phaser.Display.Color.IntegerToColor(color).rgba, { stroke: '#ffffff', strokeThickness: 5 }).setOrigin(0.5)]);
+    c.setAngle(-12).setScale(2).setAlpha(0);
+    this.tweens.add({ targets: c, scale: 1, alpha: 1, duration: 260, ease: 'Back.easeOut' });
+  }
+  flashWin(win, ok) {
+    const r = this.add.rectangle(win.cx, win.cy, win.w + 10, win.h + 10, ok ? C.green : C.red, 0.45).setDepth(24);
+    r.setStrokeStyle(8, ok ? C.green : C.red, 1);
+    this.tweens.add({ targets: r, alpha: 0, duration: 800, ease: 'Quad.easeIn', onComplete: () => r.destroy() });
+    if (!ok) this.cameras.main.shake(260, 0.008);
+  }
+  // 막 누르기 방지: 진짜 창문을 누르면 스캐너가 과열되어 잠시 누를 수 없다
+  overheat() {
+    const sec = 3, F = this.facade;
+    this.locked = true;
+    const dim = this.add.rectangle(F.x + F.w / 2, F.y + F.h / 2, F.w, F.h, 0x1b2340, 0.35).setDepth(50);
+    const t = txt(this, F.x + F.w / 2, F.y + F.h / 2, '', 34, '#ffffff', { align: 'center', stroke: '#d63b2f', strokeThickness: 8 }).setOrigin(0.5).setDepth(51);
+    let left = sec;
+    const tick = () => t.setText(`🔥 스캐너 과열!\n${left}초 동안 잘 살펴보세요`);
+    tick();
+    this.time.addEvent({ delay: 1000, repeat: sec - 1, callback: () => {
+      left--; tick();
+      if (left <= 0) { dim.destroy(); t.destroy(); this.locked = false; }
+    } });
+  }
+  tapWindow(win) {
+    if (this.locked || this.paused || win.done) return;
+    win.done = true;
+    const q = win.q, b = this.cfg.boss;
+    if (q.answer === 'fake') {
+      this.found++;
+      sfx.ding(); RUN.score += 100; this.scoreText.setText(`⭐ ${RUN.score}`); floatText(this, win.cx, win.cy - 30, '+100');
+      burst(this, win.cx, win.cy, undefined, 14);
+      this.flashWin(win, true);
+      win.view.answerMode = true;
+      win.view.extend([0, 1].filter(p => !q.pairs[p]).flatMap(p => PAIR_EDGES[p]), C.orange, 700);
+      this.stamp(win, '가짜!', C.red);
+      const left = b.fakeCount - this.found;
+      if (left === 0) this.locked = true;
+      shootBeam(this, this.paraPos, this.hud.pos(), C.red).then(() => {
+        this.hud.hit(1, left > 0 ? pick(HIT_FAKE) : '으아악!');
+        if (left === 0) this.time.delayedCall(400, () => this.finish());
+      });
+      if (left > 0) this.say(`🎯 찾았다! ${TYPE_INFO[q.type].name} — ${q.count === 0 ? '평행한 변이 하나도 없어요' : '평행한 변이 한 쌍뿐이에요'}. 남은 가짜: ${left}개`, 'good');
+    } else {
+      sfx.buzz(); this.mistakes++;
+      this.flashWin(win, false);
+      this.hud.laugh('히히! 그건 진짜 창문이야~');
+      this.overheat();
+      RUN.wrongByType[q.type] = (RUN.wrongByType[q.type] || 0) + 1;
+      RUN.wrongList.push(q);
+      win.view.answerMode = true;
+      const x0 = win.view.cx;
+      this.tweens.add({ targets: win.view, cx: x0 + 8, duration: 50, yoyo: true, repeat: 3, onComplete: () => { win.view.cx = x0; } });
+      this.stamp(win, '진짜', C.green);
+      this.say(`앗! 이건 진짜예요. ${TYPE_INFO[q.type].name}${q.type === 'PARA' ? '' : '도 평행사변형'} — 마주 보는 두 쌍의 변이 모두 평행해요 (빨강 >, 파랑 >>). 남은 가짜: ${b.fakeCount - this.found}개 (진짜를 누르면 스캐너가 3초 과열돼요!)`, 'bad');
+    }
+  }
+  finish() {
+    this.locked = true;
+    if (this.mistakes > 0) RUN.wrongQs++;
+    this.wins.forEach(w => { if (!w.done && w.q.answer === 'real') w.view.answerMode = true; if (w.q.answer === 'real') GS.parts.push({ verts: w.q.verts, rot: w.q.rot }); });
+    sfx.win();
+    this.hud.ko();
+    banner(this, '🏆 외벽 검사 완료!', '#1f8f57', 60);
+    burst(this, this.scale.width / 2, this.scale.height * 0.4, undefined, 40);
+    this.say(`🏗️ 외벽 검사 완료! 삐뚤이가 도망갔어요. ${GS.name} 탐정님 덕분에 건물 한 층이 완성됐어요!`, 'good');
+    this.nextBtn.setVisible(true);
+  }
+}
+
+class ResultScene extends Phaser.Scene {
+  constructor() { super('ResultScene'); }
+  init(d) { this.stageIdx = d.stage || 0; }
+  create() {
+    const W = this.scale.width, H = this.scale.height, pt = H > W, cfg = STAGES[this.stageIdx];
+    drawBg(this);
+    this.views = [];
+    // 별: 60초 동안 한 번에 맞힌 부품 수 (7개↑ ★★★, 4개↑ ★★), 힌트 1번마다 −1
+    let stars = RUN.firstCorrect >= STAR_RULE[1] ? 3 : (RUN.firstCorrect >= STAR_RULE[0] ? 2 : 1);
+    stars = Math.max(1, stars - RUN.hints);
+    const st = GS.stages[this.stageIdx], firstClear = !st.done, prevBest = st.best;
+    const newRecord = RUN.score > prevBest;
+    st.done = true; st.stars = Math.max(st.stars, stars); st.score = Math.max(st.score, RUN.score);
+    st.best = Math.max(st.best, RUN.score); st.bestStars = Math.max(st.bestStars, stars);
+    saveGS();
+    const floors = GS.stages.filter(s => s.done).length;
+
+    txt(this, W / 2, pt ? 70 : 52, `${cfg.icon} ${cfg.no}단계 ${cfg.name} 검사 완료!`, pt ? 38 : 42, C.inkS, { stroke: '#fff', strokeThickness: 8 }).setOrigin(0.5);
+    const Lx = pt ? W / 2 : 330;
+    const panel = this.add.graphics();
+    const pR = pt ? { x: 30, y: 120, w: W - 60, h: 300 } : { x: 40, y: 100, w: 580, h: 470 };
+    panel.fillStyle(0xffffff, 0.85).fillRoundedRect(pR.x, pR.y, pR.w, pR.h, 24);
+    panel.lineStyle(3, C.ink, 0.2).strokeRoundedRect(pR.x, pR.y, pR.w, pR.h, 24);
+    // 별
+    const sy = pt ? 190 : 190;
+    for (let i = 0; i < 3; i++) {
+      const g = this.add.graphics();
+      drawStar(g, 0, 0, 46, i < stars ? 0xffcc33 : 0xdde1e8);
+      g.setPosition(Lx + (i - 1) * 115, sy).setScale(0);
+      this.tweens.add({ targets: g, scale: 1, duration: 380, delay: 250 + i * 280, ease: 'Back.easeOut', onStart: () => { if (i < stars) sfx.mark(); } });
+    }
+    txt(this, Lx, sy + 78, `점수 ${RUN.score}점`, 36).setOrigin(0.5);
+    // 최고 기록 / 신기록
+    const rec = newRecord
+      ? (prevBest > 0 ? `🎉 신기록! (이전 최고 ${prevBest}점)` : '🎉 첫 기록이 저장됐어요!')
+      : `🏆 최고 기록 ${st.best}점 — ${st.best - RUN.score + 1}점 더 얻으면 신기록!`;
+    const rt = txt(this, Lx, sy + 118, rec, newRecord ? 26 : 21, newRecord ? '#d63b2f' : '#b8860b', { stroke: '#ffffff', strokeThickness: 5 }).setOrigin(0.5);
+    if (newRecord) this.tweens.add({ targets: rt, scale: { from: 0.9, to: 1.08 }, duration: 500, yoyo: true, repeat: -1 });
+    txt(this, Lx, sy + 152, `60초 동안 ${RUN.answered}개 검사 · 한 번에 맞힘 ${RUN.firstCorrect}개`
+      + (RUN.ko ? ` · KO ${RUN.ko}번` : '') + (RUN.hints ? ` · 힌트 ${RUN.hints}번(별 −${RUN.hints})` : ''), 21, '#5b6787').setOrigin(0.5);
+    if (!pt) {
+      const fb = txt(this, Lx, sy + 205, firstClear ? `🏗️ 건물 한 층 완성! (내 건물 ${floors}/5층)` : `🏗️ 내 건물 ${floors}/5층`, 28, '#1f8f57').setOrigin(0.5);
+      this.tweens.add({ targets: fb, scale: { from: 0.6, to: 1 }, duration: 500, delay: 1200, ease: 'Back.easeOut' });
+      txt(this, Lx, sy + 255, stars === 3 ? '완벽해요! 진짜 건축 탐정이에요 👏'
+        : (STAR_RULE[1] - RUN.firstCorrect > 0 ? `★★★까지 한 번에 맞힌 부품 ${STAR_RULE[1] - RUN.firstCorrect}개 더!` : '힌트 없이 도전하면 ★★★!'), 24, '#5b6787').setOrigin(0.5);
+      makePara(this, Lx, sy + 330, 0.45);
+    } else {
+      txt(this, Lx, sy + 188, firstClear ? `🏗️ 건물 한 층 완성! (내 건물 ${floors}/5층)` : `🏗️ 내 건물 ${floors}/5층`, 26, '#1f8f57').setOrigin(0.5);
+    }
+    // 가장 헷갈린 부품
+    const R = pt ? { x: 30, y: 440, w: W - 60, h: 170 } : { x: 650, y: 100, w: 590, h: 170 };
+    const cg = this.add.graphics();
+    cg.fillStyle(0xfff4d6, 0.95).fillRoundedRect(R.x, R.y, R.w, R.h, 24);
+    cg.lineStyle(4, 0xf2a900, 0.8).strokeRoundedRect(R.x, R.y, R.w, R.h, 24);
+    txt(this, R.x + R.w / 2, R.y + 36, '🔍 내가 가장 헷갈린 부품', 28).setOrigin(0.5);
+    const ent = Object.entries(RUN.wrongByType).sort((a, b) => b[1] - a[1]);
+    const conf = ent.length ? `${TYPE_INFO[ent[0][0]].name} (${ent[0][1]}번)` : '없어요! 완벽해요 👏';
+    const ct = txt(this, R.x + R.w / 2, R.y + 105, conf, ent.length ? 50 : 40, ent.length ? '#d63b2f' : '#1f8f57', { stroke: '#fff', strokeThickness: 6 }).setOrigin(0.5);
+    this.tweens.add({ targets: ct, scale: { from: 0.5, to: 1 }, duration: 500, delay: 700, ease: 'Back.easeOut' });
+    // 오답 다시 보기
+    const V = pt ? { x: 30, y: 630, w: W - 60, h: 400 } : { x: 650, y: 288, w: 590, h: 282 };
+    const vg = this.add.graphics();
+    vg.fillStyle(0xffffff, 0.85).fillRoundedRect(V.x, V.y, V.w, V.h, 24);
+    vg.lineStyle(3, C.ink, 0.2).strokeRoundedRect(V.x, V.y, V.w, V.h, 24);
+    txt(this, V.x + 20, V.y + 16, '📋 오답 다시 보기', 26);
+    const list = RUN.wrongList.filter((q, i, a) => a.indexOf(q) === i).slice(0, pt ? 6 : 4);
+    if (!list.length) txt(this, V.x + V.w / 2, V.y + V.h / 2 + 10, '틀린 부품이 없어요! 🎉', 30, '#1f8f57').setOrigin(0.5);
+    else {
+      txt(this, V.x + V.w - 20, V.y + 20, '눌러서 이유 확인', 20, '#5b6787').setOrigin(1, 0);
+      const cols = pt ? 3 : 4, cw = (V.w - 40) / cols, rowH = pt ? 170 : 200;
+      list.forEach((q, i) => {
+        const cx = V.x + 20 + (i % cols) * cw + cw / 2, cy = V.y + 70 + Math.floor(i / cols) * rowH;
+        const box = { x: cx - cw / 2 + 8, y: cy, w: cw - 16, h: rowH - 60 };
+        const bg = this.add.graphics();
+        bg.fillStyle(0xf3f8ff).fillRoundedRect(box.x, box.y, box.w, box.h, 14);
+        bg.lineStyle(2, C.ink, 0.3).strokeRoundedRect(box.x, box.y, box.w, box.h, 14);
+        const v = new ShapeView(this, q, { x: box.x + 6, y: box.y + 6, w: box.w - 12, h: box.h - 12 }, { labels: false, lineW: 4, maxUnit: 18, pad: 0.6 });
+        v.answerMode = true; this.views.push(v);
+        txt(this, cx, box.y + box.h + 8, `${TYPE_INFO[q.type].name}\n(${q.answer === 'real' ? '진짜' : '가짜'})`, 19, q.answer === 'real' ? '#1f8f57' : '#d63b2f', { align: 'center' }).setOrigin(0.5, 0);
+        this.add.zone(cx, box.y + box.h / 2, box.w, box.h).setInteractive({ useHandCursor: true }).on('pointerdown', () => { sfx.tap(); this.openReview(q); });
+      });
+    }
+    // 버튼
+    const allDone = GS.stages.every(s => s.done);
+    const third = (this.stageIdx < 4 && !allDone)
+      ? { label: `▶ ${this.stageIdx + 2}단계로`, fill: 0xffe08a, go: () => this.scene.start('PlayScene', { stage: this.stageIdx + 1 }) }
+      : { label: '🏁 내 건물 완성 보기', fill: 0xffe08a, go: () => this.scene.start('EndingScene') };
+    const defs = [
+      { label: '🔁 재도전 (기록 경신)', go: () => this.scene.start('PlayScene', { stage: this.stageIdx }) },
+      { label: '🗺️ 도시 지도', go: () => this.scene.start('StageSelectScene') },
+      third,
+    ];
+    if (pt) {
+      new Btn(this, W * 0.27, 1100, 300, 84, defs[0].label, { fontSize: 28, onClick: defs[0].go });
+      new Btn(this, W * 0.73, 1100, 300, 84, defs[1].label, { fontSize: 28, onClick: defs[1].go });
+      new Btn(this, W / 2, 1200, 620, 84, defs[2].label, { fontSize: 30, fill: defs[2].fill, onClick: defs[2].go });
+    } else defs.forEach((d, i) => new Btn(this, W / 2 + (i - 1) * 330, 646, 300, 84, d.label, { fontSize: 28, fill: d.fill || 0xffffff, onClick: d.go }));
+    if (firstClear || stars === 3) this.time.delayedCall(1100, () => sfx.win());
+  }
+  update() { this.views.forEach(v => v.draw()); }
+  openReview(q) {
+    const W = this.scale.width, H = this.scale.height, pt = H > W, objs = [];
+    objs.push(this.add.rectangle(W / 2, H / 2, W, H, 0x1b2340, 0.55).setDepth(900).setInteractive());
+    const pw = pt ? 660 : 900, ph = pt ? 960 : 620, px = W / 2 - pw / 2, py = H / 2 - ph / 2;
+    const g = this.add.graphics().setDepth(901);
+    g.fillStyle(0xffffff).fillRoundedRect(px, py, pw, ph, 28);
+    objs.push(g);
+    objs.push(txt(this, W / 2, py + 40, `${TYPE_INFO[q.type].name} → ${q.answer === 'real' ? '진짜 ✅' : '가짜 ❌'} 평행사변형`, 32).setOrigin(0.5).setDepth(902));
+    const rect = { x: px + 30, y: py + 80, w: pw - 60, h: ph - (pt ? 330 : 260) };
+    const v = new ShapeView(this, q, rect, { depth: 902, maxUnit: 50 });
+    v.answerMode = true; this.views.push(v);
+    v.extend([0, 1].filter(p => !q.pairs[p]).flatMap(p => PAIR_EDGES[p]), C.orange, 900);
+    objs.push(txt(this, W / 2, rect.y + rect.h + 16, explain(q) + `\n평행한 변: ${q.count}쌍 (빨강 >, 파랑 >>)`, 24, C.inkS,
+      { align: 'center', wordWrap: { width: pw - 80, useAdvancedWrap: true }, lineSpacing: 6 }).setOrigin(0.5, 0).setDepth(902));
+    objs.push(new Btn(this, W / 2, py + ph - 56, 240, 72, '닫기', { fontSize: 28, onClick: () => {
+      objs.forEach(o => o.destroy()); this.views = this.views.filter(x => x !== v); v.destroy();
+    } }).setDepth(903));
+  }
+}
+
+class StageSelectScene extends Phaser.Scene {
+  constructor() { super('StageSelectScene'); }
+  init(d) { this.retry = !!(d && d.retry); }
+  create() {
+    const W = this.scale.width, H = this.scale.height, pt = H > W;
+    drawBg(this);
+    txt(this, W / 2, pt ? 70 : 52, '🗺️ 미래 도시 지도', pt ? 44 : 46, C.inkS, { stroke: '#fff', strokeThickness: 8 }).setOrigin(0.5);
+    txt(this, W / 2, pt ? 130 : 104, `${GS.name} 탐정님, 검사할 건물을 골라요! (권장 순서: 1 → 5)`, pt ? 24 : 26, '#5b6787').setOrigin(0.5);
+    makeMuteBtn(this, W - 44, 40);
+    const road = this.add.graphics();
+    road.lineStyle(pt ? 70 : 60, 0xffffff, 0.55);
+    if (pt) road.lineBetween(W / 2, 170, W / 2, 1010); else road.lineBetween(40, 400, W - 40, 400);
+    STAGES.forEach((s, i) => {
+      const st = GS.stages[i];
+      const card = pt ? { x: 40, y: 170 + i * 168, w: W - 80, h: 150 } : { x: W / 2 + (i - 2) * 244 - 112, y: 150, w: 224, h: 420 };
+      const g = this.add.graphics();
+      g.fillStyle(0x1b2340, 0.12).fillRoundedRect(card.x + 4, card.y + 6, card.w, card.h, 22);
+      g.fillStyle(st.done ? 0xeafff3 : 0xffffff, 0.96).fillRoundedRect(card.x, card.y, card.w, card.h, 22);
+      g.lineStyle(4, st.done ? C.green : C.ink, st.done ? 0.9 : 0.35).strokeRoundedRect(card.x, card.y, card.w, card.h, 22);
+      const stars = '★'.repeat(st.stars) + '☆'.repeat(3 - st.stars);
+      if (pt) {
+        drawBuildingIcon(g, i, card.x + 90, card.y + 72, 0.85);
+        txt(this, card.x + 190, card.y + 22, `${s.no}단계 ${s.icon} ${s.name}`, 30);
+        txt(this, card.x + 190, card.y + 66, s.point, 22, '#5b6787');
+        txt(this, card.x + 190, card.y + 102, stars, 30, '#e0a800');
+        if (st.best > 0) txt(this, card.x + 330, card.y + 108, `🏆 최고 ${st.best}점`, 21, '#b8860b');
+        if (st.done) txt(this, card.x + card.w - 20, card.y + 20, '✔ 완료', 22, '#1f8f57').setOrigin(1, 0);
+        if (i === 4) txt(this, card.x + card.w - 20, card.y + card.h - 20, '도전!', 24, '#d63b2f').setOrigin(1, 1);
+      } else {
+        drawBuildingIcon(g, i, card.x + card.w / 2, card.y + 120, 1.15);
+        txt(this, card.x + card.w / 2, card.y + 228, `${s.no}단계`, 24, '#5b6787').setOrigin(0.5);
+        txt(this, card.x + card.w / 2, card.y + 264, `${s.icon} ${s.name}`, 28).setOrigin(0.5);
+        txt(this, card.x + card.w / 2, card.y + 306, s.point, 20, '#5b6787', { align: 'center', wordWrap: { width: card.w - 20 } }).setOrigin(0.5);
+        txt(this, card.x + card.w / 2, card.y + 342, stars, 34, '#e0a800').setOrigin(0.5);
+        if (st.best > 0) txt(this, card.x + card.w / 2, card.y + 375, `🏆 최고 ${st.best}점`, 19, '#b8860b').setOrigin(0.5);
+        if (st.done) txt(this, card.x + card.w / 2, card.y + 402, '✔ 완료', 22, '#1f8f57').setOrigin(0.5);
+        else if (i === 4) txt(this, card.x + card.w / 2, card.y + 402, '🔥 도전!', 22, '#d63b2f').setOrigin(0.5);
+        else txt(this, card.x + card.w / 2, card.y + 402, '추천 순서 ' + (i + 1), 20, '#8a93a8').setOrigin(0.5);
+      }
+      const z = this.add.zone(card.x + card.w / 2, card.y + card.h / 2, card.w, card.h).setInteractive({ useHandCursor: true });
+      z.on('pointerover', () => g.setAlpha(0.85)).on('pointerout', () => g.setAlpha(1));
+      z.on('pointerdown', () => { sfx.tap(); this.scene.start('PlayScene', { stage: i }); });
+    });
+    const floors = GS.stages.filter(s => s.done).length;
+    const by = pt ? 1120 : 650;
+    new Btn(this, pt ? W * 0.27 : W / 2 - 220, by, pt ? 310 : 360, 80, '📖 훈련 다시 하기', { fontSize: 26, onClick: () => this.scene.start('TutorialScene') });
+    const eb = new Btn(this, pt ? W * 0.73 : W / 2 + 220, by, pt ? 310 : 360, 80, `🏗️ 내 건물 보기 (${floors}/5층)`, { fontSize: 26, fill: 0xffe08a,
+      onClick: () => this.scene.start('EndingScene'), onDisabled: () => sfx.soft() });
+    eb.setEnabled(floors > 0);
+    txt(this, W / 2, pt ? 1215 : 702, `이번 도전 ${sumOf('score')}점 · ★ ${sumOf('stars')}/15 · 🏆 최고 기록 합계 ${sumOf('best')}점`, 22, '#5b6787').setOrigin(0.5);
+    if (this.retry) banner(this, '🔄 재도전! 최고 기록을 넘어 보세요', '#e8453c', 44);
+  }
+}
+
+class EndingScene extends Phaser.Scene {
+  constructor() { super('EndingScene'); }
+  create() {
+    const W = this.scale.width, H = this.scale.height, pt = H > W;
+    drawBg(this);
+    const done = GS.stages.map((s, i) => s.done ? i : -1).filter(i => i >= 0);
+    const all = done.length === 5;
+    txt(this, W / 2, pt ? 70 : 50, all ? '🎉 나만의 미래 건물 완성!' : `🏗️ 나만의 미래 건물 (${done.length}/5층)`, pt ? 40 : 44, C.inkS, { stroke: '#fff', strokeThickness: 8 }).setOrigin(0.5);
+    // 건물: 층마다 모은 진짜 평행사변형 부품으로 창문을 만든다
+    const bx = pt ? W / 2 : 360, base = pt ? 760 : 670, fw = 360, fh = 82;
+    const g = this.add.graphics();
+    g.fillStyle(0x7fc89a).fillRect(bx - 260, base, 520, 16);
+    const floorCols = [0xffd6a5, 0xa0c4ff, 0x9bf6ff, 0xfdffb6, 0xd0bfff];
+    const defaults = [[P(0, 0), P(4, 0), P(5, 3), P(1, 3)], [P(0, 0), P(4, 0), P(4, 3), P(0, 3)], [P(0, 2), P(2, 0), P(4, 2), P(2, 4)]];
+    let partIdx = 0;
+    done.forEach((si, f) => {
+      const fy = base - (f + 1) * fh, fl = this.add.graphics();
+      fl.fillStyle(floorCols[si]).fillRect(bx - fw / 2, fy, fw, fh);
+      fl.lineStyle(4, C.ink).strokeRect(bx - fw / 2, fy, fw, fh);
+      for (let k = 0; k < 4; k++) {
+        const part = GS.parts.length ? GS.parts[partIdx++ % GS.parts.length] : { verts: defaults[k % 3], rot: 0 };
+        const wx = bx - fw / 2 + 50 + k * 87, wy = fy + fh / 2;
+        fl.fillStyle(0xffffff, 0.6).fillRoundedRect(wx - 36, wy - 32, 72, 64, 8);
+        drawMiniShape(fl, part.verts, wx, wy, 58, C.glass, part.rot, 3);
+      }
+      txt(this, bx + fw / 2 + 14, fy + fh / 2, `${STAGES[si].icon} ${STAGES[si].no}층`, 22).setOrigin(0, 0.5);
+      fl.setAlpha(0); fl.y = -40;
+      this.tweens.add({ targets: fl, alpha: 1, y: 0, duration: 450, delay: 300 + f * 350, ease: 'Bounce.easeOut', onStart: () => sfx.mark() });
+    });
+    const topY = base - done.length * fh;
+    const roof = this.add.graphics();
+    roof.fillStyle(0x5b6787).fillTriangle(bx - fw / 2 - 20, topY, bx + fw / 2 + 20, topY, bx, topY - 70);
+    roof.lineStyle(4, C.ink).strokeTriangle(bx - fw / 2 - 20, topY, bx + fw / 2 + 20, topY, bx, topY - 70);
+    roof.lineStyle(4, C.ink).lineBetween(bx, topY - 70, bx, topY - 110);
+    roof.fillStyle(C.red).fillTriangle(bx, topY - 110, bx + 40, topY - 98, bx, topY - 86);
+    roof.setAlpha(0); this.tweens.add({ targets: roof, alpha: 1, duration: 400, delay: 300 + done.length * 350 });
+    // 배지 + 점수
+    const ix = pt ? W / 2 : 900, iy = pt ? 880 : 200;
+    const bg = this.add.graphics();
+    bg.fillStyle(0xffcc33).fillCircle(ix, iy, 70); bg.lineStyle(6, C.ink).strokeCircle(ix, iy, 70);
+    bg.fillStyle(0xffe680).fillCircle(ix, iy, 54);
+    para(bg, ix - 34, iy - 22, 50, 44, 18, C.blue, true);
+    bg.fillStyle(C.red).fillTriangle(ix - 40, iy + 56, ix - 10, iy + 66, ix - 46, iy + 110).fillTriangle(ix + 40, iy + 56, ix + 10, iy + 66, ix + 46, iy + 110);
+    const total = sumOf('score'), stars = sumOf('stars');
+    const ty = pt ? 1000 : 340;
+    txt(this, ix, ty, `명예 건축 탐정 ${GS.name}`, 34).setOrigin(0.5);
+    txt(this, ix, ty + 44, `이번 도전 ${total}점 · ★ ${stars}/15`, 28, '#b8860b').setOrigin(0.5);
+    txt(this, ix, ty + 80, `🏆 최고 기록 합계 ${sumOf('best')}점`, 22, '#5b6787').setOrigin(0.5);
+    const qBox = txt(this, ix, ty + (pt ? 112 : 118), '💬 내가 설계한 미래 건물의 창문에도\n진짜 평행사변형을 썼나요?\n마주 보는 두 쌍의 변이 평행한지 확인해 봐요!', 24, C.inkS,
+      { align: 'center', lineSpacing: 6, backgroundColor: '#ffffffcc', padding: { x: 18, y: 12 } }).setOrigin(0.5, 0);
+    if (!pt) makePara(this, 1170, 470, 0.7);
+    const by = pt ? 1215 : 650;
+    new Btn(this, ix - 160, by, 290, 76, '🗺️ 도시 지도로', { fontSize: 26, onClick: () => this.scene.start('StageSelectScene') });
+    new Btn(this, ix + 160, by, 290, 76, '🔄 처음부터 재도전', { fontSize: 24, onClick: () => {
+      restartRun();   // 층·별은 처음부터, 최고 기록은 그대로
+      this.scene.start('StageSelectScene', { retry: true });
+    } });
+    if (qBox && all) sfx.win();
+    // 색종이
+    const cols = [C.red, C.blue, C.yellow, C.green, 0xb48cff];
+    for (let i = 0; i < (all ? 70 : 30); i++) {
+      const r = this.add.rectangle(ri(0, W), ri(-H, -20), ri(8, 14), ri(12, 20), pick(cols)).setDepth(100).setAngle(ri(0, 360));
+      this.tweens.add({ targets: r, y: H + 40, angle: r.angle + ri(180, 720), x: r.x + ri(-80, 80), duration: ri(3000, 6000), delay: ri(0, 3000), repeat: -1 });
+    }
+  }
+}
+
+/* =====================================================================
+   ⑤ 게임 실행
+   ===================================================================== */
+const wantPortrait = () => window.innerHeight > window.innerWidth * 1.05;
+let started = false;   // 타이틀을 지나 게임을 시작했는지
+// 태블릿을 돌려 가로/세로가 바뀌면 그 방향에 맞는 화면 배치로 다시 만든다 (진행 기록은 유지)
+let resizeTimer = null;
+window.addEventListener('resize', () => {
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(() => {
+    if (!window.game || wantPortrait() === (window.game.scale.height > window.game.scale.width)) return;
+    const active = window.game.scene.getScenes(true)[0];
+    const key = active ? active.scene.key : 'TitleScene';
+    window.game.destroy(true);
+    startGame(['TitleScene', 'StoryScene', 'TutorialScene', 'EndingScene'].includes(key) ? key : (started ? 'StageSelectScene' : 'TitleScene'));
+  }, 400);
+});
+function startGame(firstKey = 'TitleScene') {
+  BootScene.firstKey = firstKey;
+  const portrait = wantPortrait();
+  window.game = new Phaser.Game({
+    type: Phaser.AUTO,
+    parent: 'game',
+    backgroundColor: '#d9f1ff',
+    width: portrait ? 720 : 1280,
+    height: portrait ? 1280 : 720,
+    scale: { mode: Phaser.Scale.FIT, autoCenter: Phaser.Scale.CENTER_BOTH },
+    dom: { createContainer: true },
+    scene: [BootScene, TitleScene, StoryScene, TutorialScene, StageSelectScene, PlayScene, BossScene, ResultScene, EndingScene],
+  });
+}
+(function boot() {
+  if (typeof Phaser === 'undefined') {
+    document.getElementById('loading').textContent = '⚠️ 게임 엔진을 불러오지 못했어요. 인터넷 연결을 확인하고 새로고침해 주세요.';
+    return;
+  }
+  // 한글 웹폰트는 글자 묶음별로 나뉘어 있으므로, 게임에 쓰인 모든 글자를 미리 불러온다
+  const allText = document.getElementById('gamecode').textContent.replace(/[\x00-\x7F]/g, '');
+  const ready = (document.fonts && document.fonts.load)
+    ? Promise.race([document.fonts.load('30px "Jua"', allText + '가나다ABC123'), new Promise(r => setTimeout(r, 3000))])
+    : Promise.resolve();
+  ready.then(() => startGame(), () => startGame());
+})();
+</script>
+</body>
+</html>
