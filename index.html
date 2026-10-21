@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-<title>가짜 평행사변형을 찾아라</title>
+<title>가짜 평행사변형 퇴치 작전</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Jua&display=swap" rel="stylesheet">
@@ -826,7 +826,7 @@ class TitleScene extends Phaser.Scene {
       this.tweens.add({ targets: g, y: g.y - ri(20, 50), angle: g.angle + ri(-20, 20), duration: ri(2500, 4000), yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
     }
     txt(this, W / 2, pt ? 120 : 80, '2050 미래 도시 건축 탐정단', pt ? 28 : 30, '#5b6787').setOrigin(0.5);
-    const t = txt(this, W / 2, pt ? 240 : 170, pt ? '🕵️ 가짜 평행사변형을\n찾아라' : '🕵️ 가짜 평행사변형을 찾아라', pt ? 62 : 66, C.inkS,
+    const t = txt(this, W / 2, pt ? 240 : 170, pt ? '🕵️ 가짜 평행사변형\n퇴치 작전' : '🕵️ 가짜 평행사변형 퇴치 작전', pt ? 62 : 66, C.inkS,
       { stroke: '#ffffff', strokeThickness: 12, align: 'center' }).setOrigin(0.5);
     this.tweens.add({ targets: t, scale: 1.03, duration: 1200, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
     makePara(this, pt ? W * 0.27 : W * 0.15, pt ? 520 : 440, pt ? 1.4 : 1.5);
