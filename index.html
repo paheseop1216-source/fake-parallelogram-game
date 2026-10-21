@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-<title>가짜 평행사변형 퇴치 작전</title>
+<title>평행사변형 판별 작전</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Jua&display=swap" rel="stylesheet">
@@ -51,14 +51,14 @@ const TYPE_INFO = {
 // 3단계: 단계마다 새 규칙 하나씩 (art = 도시 지도 건물 그림 번호)
 //  1 창문 공장  : 한 쌍 vs 두 쌍 — 도움(평행 표시)이 20초마다 줄어든다
 //  2 미래 박물관: 직사각형·마름모·정사각형도 진짜 — 규칙 반전(진짜를 잡는다), 부품이 빙글빙글 돈다
-//  3 우주 정거장: 눈속임 간파(도전) — 떠 있는 진짜가 슬쩍 가짜로 변신한다
+//  3 우주 정거장: 눈속임 간파 — 떠 있는 진짜가 슬쩍 가짜로 변신한다
 const STAGES = [
   { no: 1, name: '창문 공장', icon: '🏠', art: 0, point: '한 쌍 vs 두 쌍', grid: true, rotate: 'none', target: 'fake',
     intro: '평행한 변이 두 쌍이면 진짜, 한 쌍 이하면 가짜! 처음엔 평행 표시가 보이다가 점점 사라져요.' },
   { no: 2, name: '미래 박물관', icon: '🏛️', art: 3, point: '특별한 평행사변형 (규칙 반전!)', grid: false, rotate: 'any', target: 'real',
     intro: '이번엔 반대! 박물관에 전시할 진짜 평행사변형만 잡아요. 부품이 빙글빙글 돌아요.' },
-  { no: 3, name: '우주 정거장', icon: '🚀', art: 4, point: '눈속임 간파 (도전)', grid: false, rotate: 'any', target: 'fake',
-    intro: '삐뚤이가 진짜를 몰래 가짜로 바꿔요! 사라질 때까지 끝까지 지켜봐요.' },
+  { no: 3, name: '우주 정거장', icon: '🚀', art: 4, point: '눈속임 간파', grid: true, rotate: 'none', target: 'fake',
+    intro: '삐뚤이가 진짜를 몰래 가짜로 바꿔요! 모눈 칸을 세어 보면 살짝 틀어진 게 보여요.' },
 ];
 // 이번 단계에서 잡아야 하는 쪽 이름
 const targetWord = cfg => cfg.target === 'real' ? '진짜' : '가짜';
@@ -825,7 +825,7 @@ class TitleScene extends Phaser.Scene {
       this.tweens.add({ targets: g, y: g.y - ri(20, 50), angle: g.angle + ri(-20, 20), duration: ri(2500, 4000), yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
     }
     txt(this, W / 2, pt ? 120 : 80, '2050 미래 도시 건축 탐정단', pt ? 28 : 30, '#5b6787').setOrigin(0.5);
-    const t = txt(this, W / 2, pt ? 240 : 170, pt ? '🕵️ 가짜 평행사변형\n퇴치 작전' : '🕵️ 가짜 평행사변형 퇴치 작전', pt ? 62 : 66, C.inkS,
+    const t = txt(this, W / 2, pt ? 240 : 170, pt ? '🕵️ 평행사변형\n판별 작전' : '🕵️ 평행사변형 판별 작전', pt ? 62 : 66, C.inkS,
       { stroke: '#ffffff', strokeThickness: 12, align: 'center' }).setOrigin(0.5);
     this.tweens.add({ targets: t, scale: 1.03, duration: 1200, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
     makePara(this, pt ? W * 0.27 : W * 0.15, pt ? 520 : 440, pt ? 1.4 : 1.5);
@@ -871,7 +871,6 @@ class TitleScene extends Phaser.Scene {
     input.addEventListener('input', refresh);
     input.addEventListener('keydown', e => { if (e.key === 'Enter') { sfx.tap(); go(contBtn.visible ? 'continue' : 'new'); } });
     refresh();
-    txt(this, W / 2, H - 30, '초등학교 4학년 수학 · 사각형 · 정리 활동', 20, '#5b6787').setOrigin(0.5);
     makeMuteBtn(this, W - 44, 40);
   }
 }
@@ -1009,8 +1008,9 @@ const WHACK = [
     win: { land: [3, 2], port: [2, 3] }, ko: 10, help: true },
   { fakes: ['KITE', 'ISO_TRAP', 'TRAP'], reals: ['RECT', 'SQUARE', 'RHOMBUS', 'PARA'], stay: [3000, 2000], gap: [1250, 800], active: [2, 3],
     win: { land: [4, 2], port: [3, 3] }, ko: 10, spin: true },
-  { fakes: ['NEAR_PARA', 'NEAR_PARA', 'TRAP'], reals: ['PARA', 'RECT', 'RHOMBUS'], stay: [2700, 1700], gap: [1100, 650], active: [2, 3],
-    win: { land: [4, 2], port: [3, 3] }, ko: 10, morph: 0.4 },
+  // 3단계는 '거의' 평행사변형을 가려내야 해서 모눈을 켜고, 창문을 크게(6개), 천천히, 동시 1~2개로 쉽게 조정
+  { fakes: ['NEAR_PARA', 'TRAP'], reals: ['PARA', 'RECT', 'RHOMBUS'], stay: [3400, 2500], gap: [1500, 1000], active: [1, 2],
+    win: { land: [3, 2], port: [2, 3] }, ko: 10, morph: 0.3 },
 ];
 // 1단계 도움: 0~20초 평행 표시 전부 → 20~40초 한 쌍만 → 40초부터 없음
 const HELP_STEPS = [[0, 'all', '🖍️ 도움: 평행 표시가 모두 보여요'], [20, 'one', '🖍️ 이제 한 쌍만 보여 줘요! 나머지 쌍은 직접 확인'], [40, 'none', '🖍️ 이제 도움 없이! 탐정의 눈으로']];
@@ -1205,10 +1205,10 @@ class PlayScene extends Phaser.Scene {
     const from = q.verts.map(v => P(v.x, v.y));
     // 판정은 바로 가짜로 바뀐다 (변하는 도중에 눌러도 가짜를 잡은 것)
     q.answer = 'fake'; q.type = 'NEAR_PARA'; q.pairs = pairFlags(nv); q.count = q.pairs.filter(Boolean).length; q.morphed = true;
-    p.left = Math.max(p.left, 1700);
+    p.left = Math.max(p.left, 2400);   // 변신을 보고 잡을 시간을 넉넉히
     sfx.laugh();
     this.hud.talk('히히, 살짝 비틀어야지~', 1300);
-    this.tweens.addCounter({ from: 0, to: 1, duration: 550, ease: 'Sine.easeInOut',
+    this.tweens.addCounter({ from: 0, to: 1, duration: 900, ease: 'Sine.easeInOut',
       onUpdate: t => { const k = t.getValue(); q.verts = from.map((v, i) => P(lerp(v.x, nv[i].x, k), lerp(v.y, nv[i].y, k))); } });
     const s = this.add.circle(w.cx, w.cy, Math.min(w.w, w.h) * 0.45, 0xb48cff, 0.35).setDepth(20);
     this.tweens.add({ targets: s, alpha: 0, scale: 1.3, duration: 650, onComplete: () => s.destroy() });
@@ -1597,18 +1597,22 @@ class ResultScene extends Phaser.Scene {
   openReview(q) {
     const W = this.scale.width, H = this.scale.height, pt = H > W, objs = [];
     objs.push(this.add.rectangle(W / 2, H / 2, W, H, 0x1b2340, 0.55).setDepth(900).setInteractive());
-    const pw = pt ? 660 : 900, ph = pt ? 960 : 620, px = W / 2 - pw / 2, py = H / 2 - ph / 2;
+    const pw = pt ? 660 : 900, ph = pt ? 960 : 640, px = W / 2 - pw / 2, py = H / 2 - ph / 2;
     const g = this.add.graphics().setDepth(901);
     g.fillStyle(0xffffff).fillRoundedRect(px, py, pw, ph, 28);
     objs.push(g);
     objs.push(txt(this, W / 2, py + 40, `${TYPE_INFO[q.type].name} → ${q.answer === 'real' ? '진짜 ✅' : '가짜 ❌'} 평행사변형`, 32).setOrigin(0.5).setDepth(902));
-    const rect = { x: px + 30, y: py + 80, w: pw - 60, h: ph - (pt ? 330 : 260) };
+    // 아래에서부터 배치: 닫기 버튼 → 그 위에 설명(실제 높이를 재서) → 남은 공간에 도형
+    const btnY = py + ph - 48, btnTop = btnY - 32;
+    const ex = txt(this, W / 2, 0, explain(q) + `\n평행한 변: ${q.count}쌍 (빨강 >, 파랑 >>)`, 23, C.inkS,
+      { align: 'center', wordWrap: { width: pw - 80, useAdvancedWrap: true }, lineSpacing: 6 }).setOrigin(0.5, 0).setDepth(902);
+    ex.setY(btnTop - 18 - ex.height);
+    objs.push(ex);
+    const rect = { x: px + 30, y: py + 80, w: pw - 60, h: Math.max(120, ex.y - 14 - (py + 80)) };
     const v = new ShapeView(this, q, rect, { depth: 902, maxUnit: 50 });
     v.answerMode = true; this.views.push(v);
     v.extend([0, 1].filter(p => !q.pairs[p]).flatMap(p => PAIR_EDGES[p]), C.orange, 900);
-    objs.push(txt(this, W / 2, rect.y + rect.h + 16, explain(q) + `\n평행한 변: ${q.count}쌍 (빨강 >, 파랑 >>)`, 24, C.inkS,
-      { align: 'center', wordWrap: { width: pw - 80, useAdvancedWrap: true }, lineSpacing: 6 }).setOrigin(0.5, 0).setDepth(902));
-    objs.push(new Btn(this, W / 2, py + ph - 56, 240, 72, '닫기', { fontSize: 28, onClick: () => {
+    objs.push(new Btn(this, W / 2, btnY, 240, 64, '닫기', { fontSize: 28, onClick: () => {
       objs.forEach(o => o.destroy()); this.views = this.views.filter(x => x !== v); v.destroy();
     } }).setDepth(903));
   }
@@ -1621,7 +1625,7 @@ class StageSelectScene extends Phaser.Scene {
     const W = this.scale.width, H = this.scale.height, pt = H > W;
     drawBg(this); homeBtn(this);
     txt(this, W / 2, pt ? 70 : 52, '🗺️ 미래 도시 지도', pt ? 44 : 46, C.inkS, { stroke: '#fff', strokeThickness: 8 }).setOrigin(0.5);
-    txt(this, W / 2, pt ? 130 : 104, `${GS.name} 탐정님, 검사할 건물을 골라요! (권장 순서: 1 → 3, 3단계는 도전!)`, pt ? 24 : 26, '#5b6787').setOrigin(0.5);
+    txt(this, W / 2, pt ? 130 : 104, `${GS.name} 탐정님, 검사할 건물을 골라요! (권장 순서: 1 → 3)`, pt ? 24 : 26, '#5b6787').setOrigin(0.5);
     makeMuteBtn(this, W - 44, 40);
     const road = this.add.graphics();
     road.lineStyle(pt ? 70 : 60, 0xffffff, 0.55);
@@ -1641,7 +1645,6 @@ class StageSelectScene extends Phaser.Scene {
         txt(this, card.x + 220, card.y + 134, stars, 32, '#e0a800');
         if (st.best > 0) txt(this, card.x + 220, card.y + 180, `🏆 최고 ${st.best}점`, 22, '#b8860b');
         if (st.done) txt(this, card.x + card.w - 20, card.y + 20, '✔ 완료', 22, '#1f8f57').setOrigin(1, 0);
-        if (i === STAGES.length - 1) txt(this, card.x + card.w - 20, card.y + card.h - 20, '도전!', 24, '#d63b2f').setOrigin(1, 1);
       } else {
         drawBuildingIcon(g, s.art, card.x + card.w / 2, card.y + 120, 1.15);
         txt(this, card.x + card.w / 2, card.y + 228, `${s.no}단계`, 24, '#5b6787').setOrigin(0.5);
@@ -1650,7 +1653,6 @@ class StageSelectScene extends Phaser.Scene {
         txt(this, card.x + card.w / 2, card.y + 342, stars, 34, '#e0a800').setOrigin(0.5);
         if (st.best > 0) txt(this, card.x + card.w / 2, card.y + 375, `🏆 최고 ${st.best}점`, 19, '#b8860b').setOrigin(0.5);
         if (st.done) txt(this, card.x + card.w / 2, card.y + 402, '✔ 완료', 22, '#1f8f57').setOrigin(0.5);
-        else if (i === STAGES.length - 1) txt(this, card.x + card.w / 2, card.y + 402, '🔥 도전!', 22, '#d63b2f').setOrigin(0.5);
         else txt(this, card.x + card.w / 2, card.y + 402, '추천 순서 ' + (i + 1), 20, '#8a93a8').setOrigin(0.5);
       }
       const z = this.add.zone(card.x + card.w / 2, card.y + card.h / 2, card.w, card.h).setInteractive({ useHandCursor: true });
