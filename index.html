@@ -1130,12 +1130,14 @@ function drawFacade(scene, F, cols, rows, stageIdx) {
     light.lineStyle(5, C.yellow, 1).strokeRoundedRect(x - 2, y - 2, cw + 4, ch + 4, 12);
     // 창턱: 부품보다 앞에 그려서 부품이 창턱 뒤에서 쑥 올라오는 것처럼 보이게
     const sill = scene.add.graphics().setDepth(10.5);
-    sill.fillStyle(0x1b2340, 0.25).fillRoundedRect(x - 10, y + ch - sillH + 6, cw + 20, sillH, 6);
-    sill.fillStyle(0xe9edf6).fillRoundedRect(x - 12, y + ch - sillH, cw + 24, sillH, 6);
-    sill.fillStyle(0xffffff, 0.8).fillRect(x - 8, y + ch - sillH + 3, cw + 16, 3);
-    sill.lineStyle(3, C.ink).strokeRoundedRect(x - 12, y + ch - sillH, cw + 24, sillH, 6);
-    wins.push({ x, y, w: cw, h: ch, cx: x + cw / 2, cy: y + ch / 2, sillY: y + ch - sillH,
-      inner: { x: x + 16, y: y + 16, w: cw - 32, h: ch - 26 - sillH }, light, pop: null });
+    // 창턱은 창 안쪽 폭에 맞춰 그린다 — 노란 테두리(창 바깥 선)와 겹치지 않게
+    const sx0 = x + 5, sw = cw - 10, sy0 = y + ch - sillH - 5;
+    sill.fillStyle(0x1b2340, 0.2).fillRoundedRect(sx0, sy0 + 3, sw, sillH, 6);
+    sill.fillStyle(0xe9edf6).fillRoundedRect(sx0, sy0, sw, sillH, 6);
+    sill.fillStyle(0xffffff, 0.8).fillRect(sx0 + 6, sy0 + 3, sw - 12, 3);
+    sill.lineStyle(2.5, C.ink).strokeRoundedRect(sx0, sy0, sw, sillH, 6);
+    wins.push({ x, y, w: cw, h: ch, cx: x + cw / 2, cy: y + ch / 2, sillY: y + ch - sillH - 5,
+      inner: { x: x + 16, y: y + 16, w: cw - 32, h: ch - 30 - sillH }, light, pop: null });
   }
   return wins;
 }
